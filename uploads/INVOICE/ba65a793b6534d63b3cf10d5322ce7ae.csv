@@ -1,0 +1,6 @@
+invoice_number,invoice_date,due_date,total_amount,currency,customer_name,customer_email
+EU-2024-881,15-02-2024,15-03-2024,9800.00,EUR,Hans Weber,h.weber@germantrade.de
+EU-2024-882,18-02-2024,,14500.00,EUR,Marie Dupont,marie.d@frenchco.fr
+EU-2024-883,22-02-2024,22-03-2024,6200.50,EUR,Luca Rossi,luca.rossi@italco.it
+EU-2024-884,25-02-2024,,18900.00,EUR,Sofia Garcia,s.garcia@spanishbiz.es
+EU-2024-885,28-02-2024,28-03-2024,7750.00,EUR,Anna Kowalski,anna.k@polandinc.pl
