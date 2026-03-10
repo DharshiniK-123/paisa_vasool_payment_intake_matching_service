@@ -211,4 +211,4 @@ async def get_discrepancies(
         rows = result.mappings().all()
         return [dict(row) for row in rows]
     except Exception:
-        raise HTTPException(status_code=500, detail="Could not fetch discrepancies.")
+        raise HTTPException(status_code=500, detail="Could not fetch discrepancies")
