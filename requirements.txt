@@ -29,3 +29,4 @@ langchain-community
 langchain-google-genai
 redis
 rq
+fastapi_mail

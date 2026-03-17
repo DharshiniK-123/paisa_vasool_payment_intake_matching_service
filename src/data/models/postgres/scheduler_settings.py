@@ -1,4 +1,4 @@
-# src/data/models/postgres/scheduler_settings.py
+
 from sqlalchemy import Column, Integer, Boolean
 from src.data.clients.postgres_client import base
 

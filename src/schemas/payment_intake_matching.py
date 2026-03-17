@@ -155,4 +155,7 @@ class ReminderLogResponse(BaseModel):
     channel     : str
     status      : str
     sent_at     : datetime
+    customer_name:  Optional[str] = None
+    customer_email: Optional[str] = None
+    invoice_number: Optional[str] = None
     model_config = {"from_attributes": True}

@@ -1,13 +1,17 @@
 import json
-
 import pandas as pd
 from fastapi import UploadFile, HTTPException
+from sqlalchemy import insert as sa_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.data.models.postgres.document import Document
 from src.data.models.postgres.invoice_data import InvoiceData
 from src.data.models.postgres.payment_detail import PaymentDetail
 from src.data.models.postgres.customer import Customer
-from src.data.repositories.generic_repository import (insert_instance,get_instance_by_any,update_instance_by_id,)
+from src.data.repositories.generic_repository import (
+    update_instance_by_id,
+    get_instance_by_any,
+)
 from src.core.services.storage_service import save_file_locally
 from src.core.services.extraction_service import extract_text
 from src.control.extraction.Llm_extractor import run_extraction
@@ -21,8 +25,15 @@ ALLOWED_EXTENSIONS = {"pdf", "csv", "xlsx", "xls", "jpg", "jpeg", "png", "gif", 
 IMAGE_TYPES        = {"jpg", "jpeg", "png", "gif", "webp"}
 
 
+# ── Upload & enqueue ──────────────────────────────────────────────────────────
 
-async def upload_document_and_enqueue(file: UploadFile,document_type: str,db: AsyncSession,job_id: str,) -> dict:
+async def upload_document_and_enqueue(
+    file: UploadFile,
+    document_type: str,
+    db: AsyncSession,
+    job_id: str,
+    user_id: int | None = None,   # ← NEW: who uploaded this document
+) -> dict:
     original_name = file.filename or ""
     extension = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
     if extension not in ALLOWED_EXTENSIONS:
@@ -30,17 +41,24 @@ async def upload_document_and_enqueue(file: UploadFile,document_type: str,db: As
             status_code=400,
             detail=f"Unsupported file type '.{extension}'. Allowed: pdf, csv, xlsx, jpg, png, webp",
         )
+
     storage_path, file_type, file_url = await save_file_locally(file, document_type)
-    await insert_instance(
-        Document, db,
-        document_type=document_type,
-        file_name=original_name,
-        file_type=file_type,
-        storage_path=storage_path,
-        status="PENDING",
+
+    stmt = (
+        sa_insert(Document)
+        .values(
+            user_id=user_id,          # ← persisted so admin stats can query by user
+            document_type=document_type,
+            file_name=original_name,
+            file_type=file_type,
+            storage_path=storage_path,
+            status="PENDING",
+        )
+        .returning(Document.id)
     )
-    document = await get_instance_by_any(Document, db, {"storage_path": storage_path})
-    document_id = document.id
+    result = await db.execute(stmt)
+    await db.commit()
+    document_id = result.scalar_one()
 
     q = Queue(connection=redis_connection)
     q.enqueue(
@@ -59,9 +77,15 @@ async def upload_document_and_enqueue(file: UploadFile,document_type: str,db: As
     return {"document_id": document_id}
 
 
+# ── Extraction (runs inside RQ worker) ───────────────────────────────────────
 
-async def extract_document_data(document_id: int,storage_path: str,file_type: str,file_url: str,document_type: str,) -> list[dict]:
-
+async def extract_document_data(
+    document_id: int,
+    storage_path: str,
+    file_type: str,
+    file_url: str,
+    document_type: str,
+) -> list[dict]:
     async with AsyncSessionLocal() as db:
         await update_instance_by_id(document_id, Document, db, status="PROCESSING")
         try:
@@ -75,7 +99,6 @@ async def extract_document_data(document_id: int,storage_path: str,file_type: st
                 records = await _extract_single(extracted, document_type)
             elif file_type in ("csv", "xlsx", "xls"):
                 records = await _extract_dataframe(extracted, document_type)
-                
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_type}")
 
@@ -85,68 +108,124 @@ async def extract_document_data(document_id: int,storage_path: str,file_type: st
         except HTTPException:
             await update_instance_by_id(document_id, Document, db, status="FAILED")
             raise
-        except Exception as e:
+        except Exception:
             await update_instance_by_id(document_id, Document, db, status="FAILED")
             raise HTTPException(status_code=500, detail="Extraction failed")
 
 
+# ── Save records ──────────────────────────────────────────────────────────────
 
-async def save_document_records( document_id: int, document_type: str, records: list[dict], db: AsyncSession,) -> int:
+async def save_document_records(
+    document_id: int,
+    document_type: str,
+    records: list[dict],
+    db: AsyncSession,
+) -> int:
     count = 0
+
     for data in records:
         data = dict(data)
-        customer_id = await _resolve_customer(
-            name=data.pop("customer_name", None),
-            email=data.pop("customer_email", None),
-            db=db,
-        )
-        for field in ("id", "document_id", "customer_id", "_sa_instance_state",
-                      "customer_phone", "payer_name", "payer_email", "payer_phone"):
+
+        if data.get("customer_id"):
+            customer_id = int(data["customer_id"])
+        else:
+            customer_id = await _resolve_customer(
+                name=data.get("customer_name"),
+                email=data.get("customer_email"),
+                db=db,
+                document_type=document_type,
+            )
+
+        for field in (
+            "id", "document_id", "customer_id", "_sa_instance_state",
+            "customer_name", "customer_email", "customer_phone",
+            "payer_name", "payer_email", "payer_phone",
+        ):
             data.pop(field, None)
+
         model = InvoiceData if document_type == "INVOICE" else PaymentDetail
-        await insert_instance(model, db, document_id=document_id, customer_id=customer_id, **data)
+
+        stmt = (
+            sa_insert(model)
+            .values(document_id=document_id, customer_id=customer_id, **data)
+            .returning(model.id)
+        )
+        result = await db.execute(stmt)
+        await db.commit()
+        inserted_id = result.scalar_one()
+
         if document_type == "PAYMENT":
-            payment = await get_instance_by_any(PaymentDetail, db, {"document_id": document_id})
-            await run_matching_for_payment(payment.id, db)
+            await run_matching_for_payment(inserted_id, db)
+
         count += 1
+
     await update_instance_by_id(document_id, Document, db, status="PARSED")
+
     from src.data.clients.redis_clients import redis_client
     redis_client.delete(f"preview:{document_id}")
+
     return count
 
+
+# ── Private helpers ───────────────────────────────────────────────────────────
 
 async def _extract_single(raw_text: str, document_type: str) -> list[dict]:
     records = await run_extraction(raw_text, document_type)
     return [records]
 
+
 async def _extract_dataframe(df: pd.DataFrame, document_type: str) -> list[dict]:
     records = []
-
     for row in df.to_dict(orient="records"):
-        text = json.dumps(row)
+        text = json.dumps(row, default=str)
         result = await run_extraction(text, document_type)
         records.append(result)
-
     return records
+
+
 async def _resolve_customer(
     name: str | None,
     email: str | None,
     db: AsyncSession,
+    document_type: str = "INVOICE",
 ) -> int:
-    
-    print(".......................resolve customer................",name,"..........",email,".............")
-    if not email or str(email).lower() == "null":
+    clean_email = (email or "").strip().lower()
+    if clean_email in ("", "null", "none"):
+        if document_type == "INVOICE":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Customer email not found in document. "
+                    "Email is required for reminders. "
+                    "Add the customer manually first."
+                ),
+            )
         raise HTTPException(
             status_code=422,
             detail=(
-                "Customer email not found in document. "
-                "Email is required for reminders. "
-                "Add the customer manually first."
+                "Customer email is missing from the payment record. "
+                "Cannot resolve the customer without an email address."
             ),
         )
+
     existing = await get_instance_by_any(Customer, db, {"email": email})
     if existing:
         return existing.id
-    await insert_instance(Customer, db, name=name or email.split("@")[0], email=email)
-    created = await get_instance_by_any(Customer, db, {"email": email})
-    return created.id
+
+    if document_type == "INVOICE":
+        from src.data.repositories.generic_repository import insert_instance
+        await insert_instance(
+            Customer, db,
+            name=name or email.split("@")[0],
+            email=email,
+        )
+        created = await get_instance_by_any(Customer, db, {"email": email})
+        return created.id
+
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Customer with email '{email}' does not exist. "
+            "Payments can only be applied to existing customers."
+        ),
+    )

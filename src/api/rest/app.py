@@ -25,7 +25,9 @@ app.include_router(document_routes.router, prefix="/api/v1/payment_intake_matchi
 app.include_router(matching_router.router, prefix="/api/v1/payment_intake_matching")
 app.include_router(aged_router.router, prefix="/api/v1/payment_intake_matching")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+from src.api.websocket.aging_ws import router as aging_ws_router
 
+app.include_router(aging_ws_router)
 
 @app.get("/api/v1/payment_intake_matching/scheduler/status")
 async def scheduler_status():

@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Date, Numeric, ForeignKey, UniqueConstraint
+
+from sqlalchemy import Column, Integer, String, Date, Numeric, ForeignKey, Boolean, UniqueConstraint
 from src.data.clients.postgres_client import base
 
 
@@ -13,6 +14,7 @@ class PaymentDetail(base):
     currency           = Column(String(10), nullable=False, default="INR")
     paid_date          = Column(Date, nullable=False)
     payment_reference  = Column(String(100), nullable=True)
+    is_deleted         = Column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         UniqueConstraint(

@@ -1,35 +1,54 @@
+# src/control/extraction/Llm_extractor.py
+
 import json
 import logging
+import asyncio
 import re
+from typing import Optional, Union
+
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ValidationError
-from typing import Optional
 from langchain_core.messages import HumanMessage
+
 from src.control.extraction.llm_client import get_llm, get_vision_llm
 from src.control.extraction.prompts import INVOICE_EXTRACT_PROMPT, PAYMENT_EXTRACT_PROMPT
 
+logger = logging.getLogger(__name__)
 
+# ── Limits ─────────────────────────────────────────────────────────────────────
+MAX_TEXT_CHARS   = 40_000
+LLM_TIMEOUT_SECS = 60
+MAX_RETRIES      = 2
+
+
+# ── Schemas ─────────────────────────────────────────────────────────────────────
 
 class InvoiceExtraction(BaseModel):
-    invoice_number: str           = Field(description="Invoice ID or number")
-    invoice_date:   str           = Field(description="Invoice date in YYYY-MM-DD format")
-    due_date:       str           = Field(description="Due date in YYYY-MM-DD. If missing, invoice_date + 30 days")
-    total_amount:   float         = Field(description="Final amount due as a number")
-    currency:       str           = Field(description="3-letter currency code: INR, USD, EUR, GBP")
-    customer_name:  Optional[str] = Field(default=None, description="Customer name or null")
-    customer_email: Optional[str] = Field(default=None, description="Customer email or null")
-    gl_code:        Optional[str] = Field(default=None, description="GL code or null")
+    mismatch:       bool            = Field(description="true if this is NOT an invoice or critical data is unreadable, false if it is a valid invoice")
+    detected_type:  Optional[str]   = Field(default=None, description="If mismatch=true: what the document actually is — PAYMENT or UNKNOWN. If mismatch=false: null")
+    invoice_number: Optional[str]   = Field(default=None, description="Invoice ID or number. null if mismatch=true")
+    invoice_date:   Optional[str]   = Field(default=None, description="Invoice date in YYYY-MM-DD. null if mismatch=true")
+    due_date:       Optional[str]   = Field(default=None, description="Due date in YYYY-MM-DD. If absent use invoice_date + 30 days. null if mismatch=true")
+    total_amount:   Optional[float] = Field(default=None, description="Final amount due as a number. null if mismatch=true")
+    currency:       Optional[str]   = Field(default=None, description="3-letter code: INR, USD, EUR, GBP. null if mismatch=true")
+    customer_name:  Optional[str]   = Field(default=None, description="Customer name or null")
+    customer_email: Optional[str]   = Field(default=None, description="Customer email or null")
+    gl_code:        Optional[str]   = Field(default=None, description="GL code or null")
 
 
 class PaymentExtraction(BaseModel):
-    invoice_no:        str           = Field(description="Invoice number this payment is for")
-    payment_amount:    float         = Field(description="Amount paid as a number")
-    paid_date:         str           = Field(description="Payment date in YYYY-MM-DD format")
-    payment_reference: Optional[str] = Field(default=None, description="UTR/bank reference or null")
-    currency:          str           = Field(description="3-letter currency code: INR, USD, EUR, GBP")
-    customer_name:     Optional[str] = Field(default=None, description="Payer name or null")
-    customer_email:    Optional[str] = Field(default=None, description="Payer email or null")
+    mismatch:          bool            = Field(description="true if this is NOT a payment or critical data is unreadable, false if it is a valid payment")
+    detected_type:     Optional[str]   = Field(default=None, description="If mismatch=true: what the document actually is — INVOICE or UNKNOWN. If mismatch=false: null")
+    invoice_no:        Optional[str]   = Field(default=None, description="Invoice number(s) this payment is for. null if mismatch=true")
+    payment_amount:    Optional[float] = Field(default=None, description="Amount paid as a number. null if mismatch=true")
+    paid_date:         Optional[str]   = Field(default=None, description="Payment date in YYYY-MM-DD. null if mismatch=true")
+    payment_reference: Optional[str]   = Field(default=None, description="UTR/bank reference or null")
+    currency:          Optional[str]   = Field(default=None, description="3-letter code: INR, USD, EUR, GBP. null if mismatch=true")
+    customer_name:     Optional[str]   = Field(default=None, description="Payer name or null")
+    customer_email:    Optional[str]   = Field(default=None, description="Payer email or null")
 
+
+# ── Helpers ─────────────────────────────────────────────────────────────────────
 
 def _get_prompt_and_schema(document_type: str):
     if document_type == "INVOICE":
@@ -37,60 +56,106 @@ def _get_prompt_and_schema(document_type: str):
     return PAYMENT_EXTRACT_PROMPT, PaymentExtraction
 
 
-def _check_mismatch(parsed: dict, document_type: str) -> None:
-    if parsed and parsed.get("mismatch"):
-        detected = parsed.get("detected_type", "UNKNOWN")
-        raise HTTPException(
-            status_code=422,
-            detail=f"Document mismatch. You selected '{document_type}' "
-                   f"but uploaded file appears to be '{detected}'. "
-                   f"Please re-upload the correct document."
-        )
+def _safe_json_parse(raw: str) -> Optional[dict]:
+    """Strip markdown fences correctly (not char-by-char) then parse."""
+    cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE)
+    try:
+        return json.loads(cleaned.strip())
+    except json.JSONDecodeError:
+        return None
+
+
+def _raise_mismatch(document_type: str, detected: str) -> None:
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Document mismatch: you selected '{document_type}' "
+            f"but the file appears to be '{detected}'. "
+            "Please re-upload the correct document."
+        ),
+    )
 
 
 def _handle_llm_error(e: Exception, document_type: str) -> None:
-    logging.error(f"{document_type} extraction error: {repr(e)}")
-
+    logger.error(
+        "extraction_error",
+        extra={
+            "doc_type":   document_type,
+            "error_type": type(e).__name__,
+            "detail":     str(e),
+        },
+    )
     if isinstance(e, ValidationError):
         raise HTTPException(
             status_code=422,
-            detail=f"The uploaded {document_type.lower()} is missing required fields or contains invalid data."
+            detail=f"The uploaded {document_type.lower()} is missing required fields or has invalid data.",
         )
-
-    if isinstance(e, json.JSONDecodeError):
+    if isinstance(e, (json.JSONDecodeError, ValueError)):
         raise HTTPException(
             status_code=422,
-            detail="The document could not be parsed properly. Please check the file and try again."
+            detail="The document could not be parsed. Please verify the file and try again.",
         )
-
-    if isinstance(e, ValueError):
-        raise HTTPException(
-            status_code=422,
-            detail="The document contains invalid values. Please verify the data and try again."
-        )
-
     raise HTTPException(
         status_code=500,
-        detail="Document processing failed. Please try again."
+        detail="Document processing failed. Please try again.",
     )
 
-async def _extract_from_text(raw_text: str, document_type: str) -> dict:
-    try:
-        llm = get_llm()
-        prompt, schema = _get_prompt_and_schema(document_type)
-        response = await llm.ainvoke(prompt.format(raw_text=raw_text))
+
+def _is_transient(e: Exception) -> bool:
+    transient_phrases = ("rate limit", "timeout", "503", "502", "connection")
+    return any(p in str(e).lower() for p in transient_phrases)
+
+
+async def _invoke_with_retry(chain, input_value, retries: int = MAX_RETRIES):
+    """Invoke an LLM chain with timeout and exponential back-off retry."""
+    last_exc: Exception = RuntimeError("unreachable")
+    for attempt in range(retries + 1):
         try:
-            raw    = response.content.strip().strip("```json").strip("```").strip()
-            parsed = json.loads(raw)
-        except Exception:
-            parsed = None
-        _check_mismatch(parsed, document_type)
+            return await asyncio.wait_for(
+                chain.ainvoke(input_value),
+                timeout=LLM_TIMEOUT_SECS,
+            )
+        except asyncio.TimeoutError:
+            last_exc = TimeoutError(f"LLM timed out after {LLM_TIMEOUT_SECS}s")
+            logger.warning("llm_timeout", extra={"attempt": attempt})
+        except Exception as e:
+            if attempt < retries and _is_transient(e):
+                wait = 2 ** attempt
+                logger.warning("llm_retry", extra={"attempt": attempt, "wait_secs": wait})
+                await asyncio.sleep(wait)
+                last_exc = e
+            else:
+                raise
+    raise last_exc
+
+
+# ── Text extraction ─────────────────────────────────────────────────────────────
+
+async def _extract_from_text(raw_text: str, document_type: str) -> dict:
+    if len(raw_text) > MAX_TEXT_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Document is too large ({len(raw_text):,} chars). "
+                f"Maximum allowed is {MAX_TEXT_CHARS:,}."
+            ),
+        )
+    try:
+        prompt, schema = _get_prompt_and_schema(document_type)
+        llm = get_llm()
+
+        # Single structured call — Groq handles a plain Pydantic class fine
         structured_llm = llm.with_structured_output(schema)
-        print("my extracted data:  .................................................................",structured_llm)
-        result = await structured_llm.ainvoke(prompt.format(raw_text=raw_text))
-        print("STRUCTURED RESULT:", result)
-        print("STRUCTURED DICT:", result.model_dump())
-        return result.model_dump()
+        result: InvoiceExtraction | PaymentExtraction = await _invoke_with_retry(
+            structured_llm,
+            prompt.format(raw_text=raw_text),
+        )
+
+        if result.mismatch:
+            _raise_mismatch(document_type, result.detected_type or "UNKNOWN")
+
+        return result.model_dump(exclude={"mismatch", "detected_type"})
 
     except HTTPException:
         raise
@@ -98,15 +163,19 @@ async def _extract_from_text(raw_text: str, document_type: str) -> dict:
         _handle_llm_error(e, document_type)
 
 
+# ── Image extraction ────────────────────────────────────────────────────────────
+
 async def _extract_from_image(image_content: dict, document_type: str) -> dict:
     try:
-        llm = get_vision_llm()
         _, schema = _get_prompt_and_schema(document_type)
+        llm = get_vision_llm()
 
         schema_fields = "\n".join(
             f"- {name}: {field.description}"
             for name, field in schema.model_fields.items()
+            if name not in ("mismatch", "detected_type")
         )
+
         data_url = f"data:{image_content['media_type']};base64,{image_content['data']}"
         message = HumanMessage(content=[
             {
@@ -116,41 +185,59 @@ async def _extract_from_image(image_content: dict, document_type: str) -> dict:
             {
                 "type": "text",
                 "text": (
-                    f"STEP 1: Check if this is a {document_type}. "
-                    f"If NOT, return ONLY: {{\"mismatch\": true, \"detected_type\": \"<actual type>\"}}\n\n"
-                    f"STEP 2: If it IS a {document_type}, extract these fields "
-                    f"and return ONLY valid JSON, no explanation:\n{schema_fields}"
+                    f"STEP 1: Determine if this document is a {document_type}.\n\n"
+                    f"STEP 2a: If it is NOT a {document_type}, return ONLY valid JSON:\n"
+                    f'{{"mismatch": true, "detected_type": "<PAYMENT|INVOICE|UNKNOWN>"}}\n\n'
+                    f"STEP 2b: If it IS a {document_type}, extract the fields below and return ONLY valid JSON "
+                    f"with mismatch=false. Do NOT invent values — use null for any absent optional field:\n"
+                    f"{schema_fields}"
                 ),
-            }
+            },
         ])
-        response = await llm.ainvoke([message])
-        try:
-            raw    = response.content.strip().strip("```json").strip("```").strip()
-            parsed = json.loads(raw)
-            print("Extracted from image:" ,parsed)
-        except Exception:
-            raise HTTPException(status_code=422,detail="Could not read the document. ""Please ensure the image is clear and try again.")
-        _check_mismatch(parsed, document_type)
+
+        response = await _invoke_with_retry(llm, [message])
+
+        parsed = _safe_json_parse(response.content)
+        if parsed is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not read the document. Please ensure the image is clear and try again.",
+            )
+
+        if parsed.get("mismatch"):
+            _raise_mismatch(document_type, parsed.get("detected_type") or "UNKNOWN")
+
         try:
             validated = schema(**parsed)
-            return validated.model_dump()
-        except Exception:
-            raise HTTPException(status_code=422,detail=f"The uploaded {document_type.lower()} image is missing critical fields or contains unreadable data. "f"Please check the image and re-upload.")
+        except ValidationError as exc:
+            logger.warning(
+                "image_validation_failed",
+                extra={"doc_type": document_type, "errors": exc.errors()},
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"The {document_type.lower()} image is missing critical fields or has unreadable data. "
+                    "Please check the image and re-upload."
+                ),
+            )
+
+        return validated.model_dump(exclude={"mismatch", "detected_type"})
+
     except HTTPException:
         raise
     except Exception as e:
         _handle_llm_error(e, document_type)
 
 
-async def run_extraction(content: str | dict, document_type: str) -> dict:
+# ── Public entry point ──────────────────────────────────────────────────────────
+
+async def run_extraction(content: Union[str, dict], document_type: str) -> dict:
     try:
         if isinstance(content, dict):
             return await _extract_from_image(content, document_type)
-        else:
-            return await _extract_from_text(content, document_type)
+        return await _extract_from_text(content, document_type)
     except HTTPException:
         raise
     except Exception as e:
         _handle_llm_error(e, document_type)
-
-

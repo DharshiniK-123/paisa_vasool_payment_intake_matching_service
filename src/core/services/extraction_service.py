@@ -61,11 +61,8 @@ def extract_from_excel(storage_path: str) -> pd.DataFrame:
         raise HTTPException(status_code=422, detail=f"Excel extraction failed")
 
 
-def extract_text(storage_path: str, file_type: str,file_url:str=None) -> dict:
+def extract_text(storage_path: str, file_type: str, file_url: str = None) -> dict:
     file_type = file_type.lower()
-    if not file_url:
-        raise HTTPException(status_code=422, detail="Image URL is required but was not provided")
-    print(f"DEBUG image url: {file_url}")
     if file_type == "pdf":
         return extract_from_pdf(storage_path)
     elif file_type == "csv":
@@ -73,6 +70,8 @@ def extract_text(storage_path: str, file_type: str,file_url:str=None) -> dict:
     elif file_type in ("xlsx", "xls"):
         return extract_from_excel(storage_path)
     elif file_type in SUPPORTED_IMAGE_TYPES:
-        return extract_from_image(storage_path,file_type,file_url)
+        if not file_url:
+            raise HTTPException(status_code=422, detail="Image URL is required but was not provided")
+        return extract_from_image(storage_path, file_type, file_url)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_type}")

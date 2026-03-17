@@ -7,12 +7,13 @@ from src.api.rest.dependencies import get_db
 from src.core.services.scheduler import run_aging_and_reminders, reschedule_aging_job
 from src.data.models.postgres.reminder_log import ReminderLog
 from src.data.models.postgres.aging_config import AgingConfig
+from src.data.models.postgres.customer import Customer
+from src.data.models.postgres.invoice_data import InvoiceData
 from src.data.models.postgres.scheduler_settings import SchedulerSettings
 from src.schemas.payment_intake_matching import (
     AgingConfigCreate, AgingConfigUpdate, AgingConfigResponse, ReminderLogResponse,
 )
 
-logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Aging & Reminders"])
 
 
@@ -22,7 +23,6 @@ async def trigger_aging_job():
         await run_aging_and_reminders()
         return {"status": "Aging job completed successfully."}
     except Exception as e:
-        logger.error("Aging job failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Aging job failed: {str(e)}")
 
 
@@ -88,7 +88,6 @@ async def get_all_configs(db: AsyncSession = Depends(get_db)):
         )
         return result.scalars().all()
     except Exception as e:
-        logger.error("get_all_configs failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch aging configs.")
 
 
@@ -103,7 +102,6 @@ async def get_config(config_id: int, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("get_config failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch aging config.")
 
 
@@ -129,14 +127,12 @@ async def create_config(payload: AgingConfigCreate, db: AsyncSession = Depends(g
         raise
     except IntegrityError as e:
         await db.rollback()
-        logger.error("create_config integrity error: %s", e, exc_info=True)
         raise HTTPException(
             status_code=409,
             detail=f"A config with severity '{payload.severity}' already exists.",
         )
     except Exception as e:
         await db.rollback()
-        logger.error("create_config failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Could not create aging config: {str(e)}")
 
 
@@ -159,7 +155,6 @@ async def update_config(config_id: int, payload: AgingConfigUpdate, db: AsyncSes
         raise
     except Exception as e:
         await db.rollback()
-        logger.error("update_config failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Could not update aging config: {str(e)}")
 
 
@@ -177,15 +172,34 @@ async def delete_config(config_id: int, db: AsyncSession = Depends(get_db)):
         raise
     except Exception as e:
         await db.rollback()
-        logger.error("delete_config failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Could not delete aging config: {str(e)}")
+
 
 
 @router.get("/aging/reminders", response_model=list[ReminderLogResponse])
 async def get_all_reminders(db: AsyncSession = Depends(get_db)):
     try:
-        result = await db.execute(select(ReminderLog).order_by(ReminderLog.sent_at.desc()))
-        return result.scalars().all()
+        result = await db.execute(
+            select(
+                ReminderLog,
+                Customer.name.label("customer_name"),
+                Customer.email.label("customer_email"),
+                InvoiceData.invoice_number.label("invoice_number"),
+            )
+            .join(Customer, ReminderLog.customer_id == Customer.id)
+            .join(InvoiceData, ReminderLog.invoice_id == InvoiceData.id)
+            .order_by(ReminderLog.sent_at.desc())
+        )
+        rows = result.all()
+
+        return [
+            ReminderLogResponse(
+                **row.ReminderLog.__dict__,
+                customer_name=row.customer_name,
+                customer_email=row.customer_email,
+                invoice_number=row.invoice_number,
+            )
+            for row in rows
+        ]
     except Exception as e:
-        logger.error("get_all_reminders failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch reminders.")
