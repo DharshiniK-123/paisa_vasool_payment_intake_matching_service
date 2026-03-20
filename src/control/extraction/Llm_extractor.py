@@ -15,13 +15,11 @@ from src.control.extraction.prompts import INVOICE_EXTRACT_PROMPT, PAYMENT_EXTRA
 
 logger = logging.getLogger(__name__)
 
-# ── Limits ─────────────────────────────────────────────────────────────────────
 MAX_TEXT_CHARS   = 40_000
-LLM_TIMEOUT_SECS = 60
+LLM_TIMEOUT_SECS = 120
 MAX_RETRIES      = 2
 
 
-# ── Schemas ─────────────────────────────────────────────────────────────────────
 
 class InvoiceExtraction(BaseModel):
     mismatch:       bool            = Field(description="true if this is NOT an invoice or critical data is unreadable, false if it is a valid invoice")
@@ -48,7 +46,6 @@ class PaymentExtraction(BaseModel):
     customer_email:    Optional[str]   = Field(default=None, description="Payer email or null")
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────────
 
 def _get_prompt_and_schema(document_type: str):
     if document_type == "INVOICE":
@@ -57,7 +54,6 @@ def _get_prompt_and_schema(document_type: str):
 
 
 def _safe_json_parse(raw: str) -> Optional[dict]:
-    """Strip markdown fences correctly (not char-by-char) then parse."""
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE)
     try:
@@ -108,7 +104,6 @@ def _is_transient(e: Exception) -> bool:
 
 
 async def _invoke_with_retry(chain, input_value, retries: int = MAX_RETRIES):
-    """Invoke an LLM chain with timeout and exponential back-off retry."""
     last_exc: Exception = RuntimeError("unreachable")
     for attempt in range(retries + 1):
         try:
@@ -130,8 +125,6 @@ async def _invoke_with_retry(chain, input_value, retries: int = MAX_RETRIES):
     raise last_exc
 
 
-# ── Text extraction ─────────────────────────────────────────────────────────────
-
 async def _extract_from_text(raw_text: str, document_type: str) -> dict:
     if len(raw_text) > MAX_TEXT_CHARS:
         raise HTTPException(
@@ -144,8 +137,6 @@ async def _extract_from_text(raw_text: str, document_type: str) -> dict:
     try:
         prompt, schema = _get_prompt_and_schema(document_type)
         llm = get_llm()
-
-        # Single structured call — Groq handles a plain Pydantic class fine
         structured_llm = llm.with_structured_output(schema)
         result: InvoiceExtraction | PaymentExtraction = await _invoke_with_retry(
             structured_llm,
@@ -163,7 +154,6 @@ async def _extract_from_text(raw_text: str, document_type: str) -> dict:
         _handle_llm_error(e, document_type)
 
 
-# ── Image extraction ────────────────────────────────────────────────────────────
 
 async def _extract_from_image(image_content: dict, document_type: str) -> dict:
     try:
@@ -196,8 +186,8 @@ async def _extract_from_image(image_content: dict, document_type: str) -> dict:
         ])
 
         response = await _invoke_with_retry(llm, [message])
-
         parsed = _safe_json_parse(response.content)
+
         if parsed is None:
             raise HTTPException(
                 status_code=422,
@@ -230,7 +220,6 @@ async def _extract_from_image(image_content: dict, document_type: str) -> dict:
         _handle_llm_error(e, document_type)
 
 
-# ── Public entry point ──────────────────────────────────────────────────────────
 
 async def run_extraction(content: Union[str, dict], document_type: str) -> dict:
     try:

@@ -2,9 +2,31 @@ import pandas as pd
 import pymupdf4llm
 from fastapi import HTTPException
 import base64
+from google.cloud import storage
+import tempfile
+import os
+from google.cloud import storage as gcs
 
 SUPPORTED_IMAGE_TYPES = {"jpg", "jpeg", "png", "gif", "webp"}
+BUCKET_NAME = os.getenv("GCS_BUCKET")
+ 
+def _download_from_gcs(storage_path: str, suffix: str = None) -> str:
+    if suffix is None:
+        suffix = storage_path.rsplit(".", 1)[-1].lower()
+    
+    try:
+        client = gcs.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        blob = bucket.blob(storage_path)
 
+        tmp = tempfile.NamedTemporaryFile(suffix=f".{suffix}", delete=False)
+        blob.download_to_file(tmp)
+        tmp.flush()
+        tmp.close()
+        
+        return tmp.name
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to download file from GCS: {str(e)}")
 
 def extract_from_pdf(storage_path: str) -> str:
     try:
@@ -63,15 +85,17 @@ def extract_from_excel(storage_path: str) -> pd.DataFrame:
 
 def extract_text(storage_path: str, file_type: str, file_url: str = None) -> dict:
     file_type = file_type.lower()
+    suffix = storage_path.rsplit(".", 1)[-1].lower()
+    local_path = _download_from_gcs(storage_path,suffix)
     if file_type == "pdf":
-        return extract_from_pdf(storage_path)
+        return extract_from_pdf(local_path)
     elif file_type == "csv":
-        return extract_from_csv(storage_path)
+        return extract_from_csv(local_path)
     elif file_type in ("xlsx", "xls"):
-        return extract_from_excel(storage_path)
+        return extract_from_excel(local_path)
     elif file_type in SUPPORTED_IMAGE_TYPES:
         if not file_url:
             raise HTTPException(status_code=422, detail="Image URL is required but was not provided")
-        return extract_from_image(storage_path, file_type, file_url)
+        return extract_from_image(local_path, file_type, file_url)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_type}")

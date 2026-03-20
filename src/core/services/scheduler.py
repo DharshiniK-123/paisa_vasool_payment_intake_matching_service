@@ -2,7 +2,6 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
-
 from src.data.models.postgres.scheduler_settings import SchedulerSettings
 from src.data.clients.postgres_client import AsyncSessionLocal
 from src.core.services.aging_service import get_overdue_invoices_with_bucket

@@ -125,5 +125,5 @@ async def bulk_get_instance(model:Type,db:AsyncSession,**kwargs):
         
         return result.scalars().all()
     except SQLAlchemyError as e:
-        raise Exception(f"Get data failed")
+        raise Exception(f"Get data failed {str(e)}" )
 

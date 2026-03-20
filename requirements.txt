@@ -30,3 +30,6 @@ langchain-google-genai
 redis
 rq
 fastapi_mail
+
+asyncpg
+google-cloud-storage

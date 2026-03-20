@@ -1,13 +1,9 @@
-
-import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import re
 import json
-
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.data.models.postgres.invoice_data import InvoiceData
 from src.data.models.postgres.customer import Customer
 from src.data.models.postgres.aging_config import AgingConfig
@@ -63,26 +59,30 @@ async def _generate_email(
     }
 
     prompt = f"""
-You are a professional finance associate writing a payment reminder email on behalf of your company.
+            You are a professional finance associate writing a payment reminder email on behalf of PaisaVasool Finance Team.
 
-Customer name  : {customer.name}
-Invoice number : {invoice.invoice_number}
-Invoice date   : {invoice.invoice_date}
-Due date       : {invoice.due_date}
-Total amount   : {invoice.total_amount} {invoice.currency}
-Amount paid    : {invoice.paid_amount} {invoice.currency}
-Amount pending : {pending_amount} {invoice.currency}
-Days overdue   : {days_overdue} days
-Severity       : {severity}
-Tone guideline : {tone_guide.get(severity, "Professional and clear.")}
+            Customer name  : {customer.name}
+            Invoice number : {invoice.invoice_number}
+            Invoice date   : {invoice.invoice_date}
+            Due date       : {invoice.due_date}
+            Total amount   : {invoice.total_amount} {invoice.currency}
+            Amount paid    : {invoice.paid_amount} {invoice.currency}
+            Amount pending : {pending_amount} {invoice.currency}
+            Days overdue   : {days_overdue} days
+            Severity       : {severity}
+            Tone guideline : {tone_guide.get(severity, "Professional and clear.")}
 
-Write a professional payment reminder email.
-Return ONLY a valid JSON object with no extra text, no markdown, no explanation:
-{{
-    "subject": "concise email subject line",
-    "body": "full professional email body"
-}}
-"""
+            Write a professional payment reminder email.
+            Return ONLY a valid JSON object with no extra text, no markdown, no explanation:
+            {{
+                "subject": "concise email subject line",
+                "body": "full professional email body"
+            }}
+            Always sign off with exactly:
+            Regards,
+            Finance Team
+            PaisaVasool
+            """
 
     def _fallback_email() -> dict:
         return {
@@ -110,12 +110,7 @@ Return ONLY a valid JSON object with no extra text, no markdown, no explanation:
         return _fallback_email()
 
 
-async def process_reminder(
-    invoice: InvoiceData,
-    days_overdue: int,
-    config: AgingConfig,
-    db: AsyncSession,
-) -> ReminderLog | None:
+async def process_reminder(invoice: InvoiceData,days_overdue: int,config: AgingConfig,db: AsyncSession,) -> ReminderLog | None:
     
     frequency = config.reminder_frequency if config.reminder_frequency else 1
 
@@ -138,6 +133,7 @@ async def process_reminder(
     failure_reason = None
 
     try:
+        print("before sending email")
         await send_email(
             to      = customer.email,
             subject = email["subject"],

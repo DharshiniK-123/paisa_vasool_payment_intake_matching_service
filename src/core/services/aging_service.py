@@ -6,12 +6,7 @@ from src.data.models.postgres.aging_config import AgingConfig
 
 
 async def get_aging_configs(db: AsyncSession) -> list[AgingConfig]:
-    result = await db.execute(
-        select(AgingConfig)
-        .where(AgingConfig.is_active == True)
-        .where(AgingConfig.severity != "SCHEDULER")
-        .order_by(AgingConfig.due_days_from)
-    )
+    result = await db.execute(select(AgingConfig).where(AgingConfig.is_active == True).where(AgingConfig.severity != "SCHEDULER").order_by(AgingConfig.due_days_from))
     return result.scalars().all()
 
 

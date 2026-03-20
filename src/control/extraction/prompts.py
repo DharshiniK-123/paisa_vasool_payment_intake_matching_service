@@ -1,5 +1,3 @@
-# src/control/extraction/prompts.py
-
 INVOICE_EXTRACT_PROMPT = """
 You are a strict financial document parser. Never guess or hallucinate field values.
 

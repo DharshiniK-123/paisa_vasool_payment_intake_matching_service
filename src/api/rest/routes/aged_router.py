@@ -1,4 +1,3 @@
-import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,11 +80,7 @@ async def update_scheduler_settings(run_hour: int,run_minute: int,is_enabled: bo
 @router.get("/aging-config/", response_model=list[AgingConfigResponse])
 async def get_all_configs(db: AsyncSession = Depends(get_db)):
     try:
-        result = await db.execute(
-            select(AgingConfig)
-            .where(AgingConfig.severity != "SCHEDULER")  
-            .order_by(AgingConfig.id.asc())
-        )
+        result = await db.execute(select(AgingConfig).where(AgingConfig.severity != "SCHEDULER")  .order_by(AgingConfig.id.asc()))
         return result.scalars().all()
     except Exception as e:
         raise HTTPException(status_code=500, detail="Could not fetch aging configs.")

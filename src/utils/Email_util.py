@@ -1,6 +1,9 @@
 from fastapi_mail import FastMail, MessageSchema, MessageType, ConnectionConfig
 from src.config.settings import settings
 
+import os
+
+
 
 mail_config = ConnectionConfig(
     MAIL_USERNAME   = settings.MAIL_USERNAME,
@@ -14,10 +17,12 @@ mail_config = ConnectionConfig(
     VALIDATE_CERTS  = True,
 )
 
+
+
 fastmail = FastMail(mail_config)
 
-
 async def send_email(to: str, subject: str, body: str) -> None:
+
     message = MessageSchema(
         subject    = subject,
         recipients = [to],

@@ -64,7 +64,7 @@ async def _is_duplicate(payment_id: int, invoice_id: int, db: AsyncSession) -> b
 async def _update_invoice_status(invoice_id: int, db: AsyncSession) -> None:
     result = await db.execute(
         select(InvoiceData).where(
-            InvoiceData.id         == invoice_id,
+            InvoiceData.id == invoice_id,
             InvoiceData.is_deleted.is_(False),
         )
     )
@@ -72,25 +72,35 @@ async def _update_invoice_status(invoice_id: int, db: AsyncSession) -> None:
     if not invoice:
         return
 
+    overpayment_result = await db.execute(
+        select(func.count(MatchingPaymentInvoice.id)).where(
+            and_(
+                MatchingPaymentInvoice.invoice_id == invoice_id,
+                MatchingPaymentInvoice.match_status == "OVERPAYMENT",
+            )
+        )
+    )
+    has_overpayment = (overpayment_result.scalar() or 0) > 0
+
     total_matched = await _get_already_matched_amount(invoice_id, db)
     total         = Decimal(str(invoice.total_amount))
 
-    invoice.paid_amount    = total_matched
-    invoice.payment_status = (
-        "PAID"           if total_matched >= total else
-        "PARTIALLY_PAID" if total_matched >  0     else
-        "UNPAID"
-    )
+    invoice.paid_amount = total_matched
+
+    if has_overpayment:
+        invoice.payment_status = "OVERPAID"
+    elif total_matched == total:
+        invoice.payment_status = "PAID"
+    elif total_matched > total:
+        invoice.payment_status = "OVERPAID"
+    elif total_matched > 0:
+        invoice.payment_status = "PARTIALLY_PAID"
+    else:
+        invoice.payment_status = "UNPAID"
+
     await db.flush()
 
-
-async def _save_failed_match(
-    payment_id: int,
-    reason: str,
-    db: AsyncSession,
-    invoice_id: int | None = None,
-    score: int = 0,
-) -> MatchingPaymentInvoice:
+async def _save_failed_match(payment_id: int,reason: str,db: AsyncSession,invoice_id: int | None = None,score: int = 0,) -> MatchingPaymentInvoice:
     record = MatchingPaymentInvoice(
         payment_detail_id=payment_id,
         invoice_id=invoice_id,
@@ -105,16 +115,7 @@ async def _save_failed_match(
     return record
 
 
-def _score_invoice(
-    payment,
-    invoice,
-    invoice_nos: list[str],
-    remaining_pay: Decimal,
-    inv_remaining: Decimal,
-    converted: bool = False,
-    fx_rate: Decimal | None = None,
-    original_pay_amount: Decimal | None = None,
-) -> tuple[int, list[str]]:
+def _score_invoice(payment,invoice, invoice_nos: list[str], remaining_pay: Decimal, inv_remaining: Decimal, converted: bool = False, fx_rate: Decimal | None = None,original_pay_amount: Decimal | None = None,) -> tuple[int, list[str]]:
     score   = 0
     reasons = []
 
@@ -202,10 +203,7 @@ def _score_invoice(
     return min(score, 100), reasons
 
 
-def _resolve_match(
-    remaining_pay: Decimal,
-    inv_remaining: Decimal,
-) -> tuple[str, Decimal, Decimal]:
+def _resolve_match(remaining_pay: Decimal,inv_remaining: Decimal,) -> tuple[str, Decimal, Decimal]:
     diff = abs(remaining_pay - inv_remaining)
     if remaining_pay > inv_remaining + ROUNDING_TOLERANCE:
         return "OVERPAYMENT", inv_remaining, Decimal("0.00")
