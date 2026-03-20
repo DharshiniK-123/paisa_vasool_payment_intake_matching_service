@@ -1,21 +1,45 @@
-import os
+from google.cloud import storage
 import uuid
-import aiofiles
-from fastapi import UploadFile
+import os
 
-UPLOAD_DIR = "uploads"
-BASE_URL = os.getenv("BASE_URL", "http://localhost")
+client = storage.Client()
 
-async def save_file_locally(file: UploadFile, document_type: str) -> tuple[str, str]:
-    folder = os.path.join(UPLOAD_DIR, document_type)
-    os.makedirs(folder, exist_ok=True)
-    original_name = file.filename or "unknown"
-    extension = original_name.rsplit(".", 1)[-1].lower()
-    unique_name = f"{uuid.uuid4().hex}.{extension}"
-    storage_path = os.path.join(folder, unique_name)
+BUCKET_NAME = os.getenv("GCS_BUCKET")
+BASE_FOLDER = os.getenv("GCS_FOLDER", "paisavasool")
 
-    async with aiofiles.open(storage_path, "wb") as f:
+async def save_file(file, document_type: str):
+    try:
+
+        if not BUCKET_NAME:
+            raise ValueError("GCS_BUCKET not configured")
+
+        doc_type = document_type.lower()
+
+        if doc_type == "invoice":
+            doc_type = "invoices"
+        elif doc_type == "payment":
+            doc_type = "payments"
+        else:
+            raise ValueError(f"Invalid document_type: {document_type}")
+
+
+        bucket = client.bucket(BUCKET_NAME)
+
+        filename = file.filename or "file"
+        ext = filename.split(".")[-1] if "." in filename else "bin"
+
+        file_path = f"{BASE_FOLDER}/{doc_type}/{uuid.uuid4().hex}.{ext}"
+
+        blob = bucket.blob(file_path)
+
         content = await file.read()
-        await f.write(content)
-    file_url = f"{BASE_URL}/uploads/{document_type}/{unique_name}"
-    return storage_path, extension,file_url
+
+        blob.upload_from_string(
+            content,
+            content_type=file.content_type or "application/octet-stream"
+        )
+
+        return file_path, ext, f"https://storage.googleapis.com/{BUCKET_NAME}/{file_path}"
+
+    except Exception as e:
+        raise

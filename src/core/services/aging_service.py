@@ -6,7 +6,7 @@ from src.data.models.postgres.aging_config import AgingConfig
 
 
 async def get_aging_configs(db: AsyncSession) -> list[AgingConfig]:
-    result = await db.execute( select(AgingConfig).order_by(AgingConfig.due_days_from))
+    result = await db.execute(select(AgingConfig).where(AgingConfig.is_active == True).where(AgingConfig.severity != "SCHEDULER").order_by(AgingConfig.due_days_from))
     return result.scalars().all()
 
 
@@ -43,12 +43,21 @@ async def get_overdue_invoices(db: AsyncSession) -> list[InvoiceData]:
 async def get_overdue_invoices_with_bucket(db: AsyncSession) -> list[dict]:
     invoices = await get_overdue_invoices(db)
     configs  = await get_aging_configs(db)
+
+    print(f"[AGING] Scan: {len(invoices)} overdue invoices, {len(configs)} active configs")
+
+    if not configs:
+        print("[AGING] No active configs — go to Settings and enable your aging rules")
+        return []
+
     result = []
     for invoice in invoices:
         days_overdue = calculate_days_overdue(invoice.due_date)
         config       = assign_aging_bucket(days_overdue, configs)
         if config is None:
+            print(f"[AGING] Invoice {invoice.invoice_number} ({days_overdue} days overdue) — no matching bucket, skipping")
             continue
+        print(f"[AGING] Invoice {invoice.invoice_number} ({days_overdue} days overdue) → bucket {config.severity}")
         result.append({
             "invoice":      invoice,
             "days_overdue": days_overdue,

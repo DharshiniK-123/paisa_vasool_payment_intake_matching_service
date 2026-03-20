@@ -127,12 +127,12 @@ class AgingConfigUpdate(BaseModel):
 class AgingConfigResponse(BaseModel):
     id                 : int
     severity           : str
-    due_days_from      : Optional[int]
-    due_days_to        : Optional[int]
-    reminder_frequency : Optional[int]
+    due_days_from      : Optional[int] = None
+    due_days_to        : Optional[int] = None
+    reminder_frequency : Optional[int] = None
     is_active          : bool
-    run_hour           : Optional[int]
-    run_minute         : Optional[int]
+    run_hour           : Optional[int] = None
+    run_minute         : Optional[int] = None
     message_template   : Optional[str] = None
     model_config = {"from_attributes": True}
 
@@ -155,4 +155,7 @@ class ReminderLogResponse(BaseModel):
     channel     : str
     status      : str
     sent_at     : datetime
+    customer_name:  Optional[str] = None
+    customer_email: Optional[str] = None
+    invoice_number: Optional[str] = None
     model_config = {"from_attributes": True}

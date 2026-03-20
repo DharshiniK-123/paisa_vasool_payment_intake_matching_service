@@ -9,8 +9,5 @@ class AgingConfig(base):
     severity            = Column(String(50), nullable=False, unique=True) #LOW/MEDIUM/HIGH/CRITICAL
     due_days_from       = Column(Integer, nullable=False)  
     due_days_to         = Column(Integer, nullable=True)  
-    reminder_frequency  = Column(Integer, nullable=False)
+    reminder_frequency  = Column(Integer, nullable=True)
     is_active           = Column(Boolean,nullable=False)
-    run_hour            = Column(Integer, nullable=True)  
-    run_minute          = Column(Integer, nullable=True)
-    message_template   = Column(String, nullable=True)
