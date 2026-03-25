@@ -27,7 +27,7 @@ REDIS_URL="redis://10.125.46.155:6379"
 GCS_BUCKET="gwx-stg-intern-01"
 GCS_FOLDER="paisavasool"
 
-GROQ_API_KEY="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"
+GROQ_API_KEY="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"
 GOOGLE_API_KEY="AIzaSyBQckrnQfE7QXZN12Wb2tu8HtQOHTQvzy4"
 
 MAIL_USERNAME="dharsveni@gmail.com"

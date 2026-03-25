@@ -1,30 +1,34 @@
-import logging
 from datetime import date
 from decimal import Decimal
+
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.data.models.postgres.exchange_rate import ExchangeRate
 
-
 FRANKFURTER_BASE = "https://api.frankfurter.app"
-_HTTP_TIMEOUT    = 10.0   
+_HTTP_TIMEOUT = 10.0
 
 
-async def get_exchange_rate(rate_date: date,from_currency: str,to_currency: str,db: AsyncSession,) -> Decimal:
-    
+async def get_exchange_rate(
+    rate_date: date,
+    from_currency: str,
+    to_currency: str,
+    db: AsyncSession,
+) -> Decimal:
     from_cur = from_currency.upper().strip()
-    to_cur   = to_currency.upper().strip()
+    to_cur = to_currency.upper().strip()
 
     if from_cur == to_cur:
         return Decimal("1.00000000")
 
     cached = await db.execute(
         select(ExchangeRate).where(
-            ExchangeRate.rate_date     == rate_date,
+            ExchangeRate.rate_date == rate_date,
             ExchangeRate.from_currency == from_cur,
-            ExchangeRate.to_currency   == to_cur,
+            ExchangeRate.to_currency == to_cur,
         )
     )
     row = cached.scalar_one_or_none()
@@ -56,14 +60,12 @@ async def get_exchange_rate(rate_date: date,from_currency: str,to_currency: str,
     stmt = (
         pg_insert(ExchangeRate)
         .values(
-            rate_date     = rate_date,
-            from_currency = from_cur,
-            to_currency   = to_cur,
-            rate          = rate,
+            rate_date=rate_date,
+            from_currency=from_cur,
+            to_currency=to_cur,
+            rate=rate,
         )
-        .on_conflict_do_nothing(
-            constraint="uq_exchange_rate_date_pair"
-        )
+        .on_conflict_do_nothing(constraint="uq_exchange_rate_date_pair")
     )
     await db.execute(stmt)
     await db.flush()

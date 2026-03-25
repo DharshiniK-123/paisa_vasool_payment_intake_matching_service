@@ -1,200 +1,150 @@
+from __future__ import annotations
+
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
+
 from src.api.rest.dependencies import get_db
-from src.core.services.scheduler import run_aging_and_reminders, reschedule_aging_job
-from src.data.models.postgres.reminder_log import ReminderLog
-from src.data.models.postgres.aging_config import AgingConfig
-from src.data.models.postgres.customer import Customer
-from src.data.models.postgres.invoice_data import InvoiceData
-from src.data.models.postgres.scheduler_settings import SchedulerSettings
+from src.core.services import aged_service as service
+from src.core.services.scheduler import reschedule_aging_job, run_aging_and_reminders
 from src.schemas.payment_intake_matching import (
-    AgingConfigCreate, AgingConfigUpdate, AgingConfigResponse, ReminderLogResponse,
+    AgingConfigCreate,
+    AgingConfigResponse,
+    AgingConfigUpdate,
+    ReminderLogResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Aging & Reminders"])
 
 
 @router.post("/aging/run")
 async def trigger_aging_job():
+    """Trigger aging jobs"""
     try:
         await run_aging_and_reminders()
         return {"status": "Aging job completed successfully."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Aging job failed: {str(e)}")
-
-
-def _ist_to_utc(hour: int, minute: int):
-    total_minutes = hour * 60 + minute - 330  
-    total_minutes = total_minutes % (24 * 60)
-    return total_minutes // 60, total_minutes % 60
-
-
-def _utc_to_ist(hour: int, minute: int):
-    total_minutes = hour * 60 + minute + 330 
-    total_minutes = total_minutes % (24 * 60)  
-    return total_minutes // 60, total_minutes % 60
+        raise HTTPException(status_code=500, detail=f"Aging job failed: {str(e)}") from e
 
 
 @router.get("/scheduler/settings")
 async def get_scheduler_settings(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(SchedulerSettings).where(SchedulerSettings.id == 1))
-    row = result.scalar_one_or_none()
-    utc_hour   = row.run_hour   if row else 9
-    utc_minute = row.run_minute if row else 0
-    ist_hour, ist_minute = _utc_to_ist(utc_hour, utc_minute)
-    return {
-        "run_hour":   ist_hour,
-        "run_minute": ist_minute,
-        "is_enabled": row.is_enabled if row else False,
-    }
+    """To fetch the scheduler settings"""
+    try:
+        return await service.get_scheduler(db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not fetch scheduler settings.") from e
 
 
 @router.put("/scheduler/settings")
-async def update_scheduler_settings(run_hour: int,run_minute: int,is_enabled: bool = True,db: AsyncSession = Depends(get_db),):
-    utc_hour, utc_minute = _ist_to_utc(run_hour, run_minute)
-    print(f"[SCHEDULER] Saving IST {run_hour:02d}:{run_minute:02d} → UTC {utc_hour:02d}:{utc_minute:02d}")
-    result = await db.execute(select(SchedulerSettings).where(SchedulerSettings.id == 1))
-    row = result.scalar_one_or_none()
-    if row is None:
-        row = SchedulerSettings(id=1, run_hour=utc_hour, run_minute=utc_minute, is_enabled=is_enabled)
-        db.add(row)
-    else:
-        row.run_hour   = utc_hour
-        row.run_minute = utc_minute
-        row.is_enabled = is_enabled
-    await db.commit()
-
-    if is_enabled:
-        await reschedule_aging_job(utc_hour, utc_minute)
-
-    return {
-        "status":     "Scheduler updated",
-        "run_hour":   run_hour,    
-        "run_minute": run_minute,
-        "is_enabled": is_enabled,
-    }
+async def update_scheduler_settings(
+    run_hour: int,
+    run_minute: int,
+    is_enabled: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """update scheduler settings"""
+    try:
+        result = await service.update_scheduler(run_hour, run_minute, is_enabled, db)
+        if result["is_enabled"]:
+            await reschedule_aging_job(result["utc_hour"], result["utc_minute"])
+        return {
+            "status": result["status"],
+            "run_hour": result["run_hour"],
+            "run_minute": result["run_minute"],
+            "is_enabled": result["is_enabled"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not update scheduler settings.") from e
 
 
 @router.get("/aging-config/", response_model=list[AgingConfigResponse])
 async def get_all_configs(db: AsyncSession = Depends(get_db)):
+    """fetch all the aging buckets like low medium high"""
     try:
-        result = await db.execute(select(AgingConfig).where(AgingConfig.severity != "SCHEDULER")  .order_by(AgingConfig.id.asc()))
-        return result.scalars().all()
+        return await service.list_configs(db)
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Could not fetch aging configs.")
+        raise HTTPException(status_code=500, detail="Could not fetch aging configs.") from e
 
 
 @router.get("/aging-config/{config_id}", response_model=AgingConfigResponse)
 async def get_config(config_id: int, db: AsyncSession = Depends(get_db)):
+    """fetch a single aging config bucket"""
     try:
-        result = await db.execute(select(AgingConfig).where(AgingConfig.id == config_id))
-        config = result.scalar_one_or_none()
+        config = await service.get_config(config_id, db)
         if not config:
             raise HTTPException(status_code=404, detail=f"Aging config {config_id} not found.")
         return config
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Could not fetch aging config.")
+        raise HTTPException(status_code=500, detail="Could not fetch aging config.") from e
 
 
 @router.post("/aging-config/", response_model=AgingConfigResponse)
 async def create_config(payload: AgingConfigCreate, db: AsyncSession = Depends(get_db)):
-    try:
-        existing = await db.execute(
-            select(AgingConfig).where(AgingConfig.severity == payload.severity)
-        )
-        if existing.scalar_one_or_none():
-            raise HTTPException(
-                status_code=409,
-                detail=f"An aging config with severity '{payload.severity}' already exists. Use PUT to update it.",
-            )
-        data = payload.model_dump(exclude={"run_hour", "run_minute", "message_template"})
-        config = AgingConfig(**data)
-        db.add(config)
-        await db.commit()
-        await db.refresh(config)
-        return config
+    """Add new aging config like from to and the bucket(low/medium/high)"""
+    from sqlalchemy.exc import IntegrityError
 
-    except HTTPException:
-        raise
+    try:
+        return await service.create_config(payload, db)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except IntegrityError as e:
         await db.rollback()
         raise HTTPException(
-            status_code=409,
-            detail=f"A config with severity '{payload.severity}' already exists.",
-        )
+            status_code=409, detail=f"A config with severity '{payload.severity}' already exists."
+        ) from e
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not create aging config: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Could not create aging config: {str(e)}"
+        ) from e
 
 
 @router.put("/aging-config/{config_id}", response_model=AgingConfigResponse)
-async def update_config(config_id: int, payload: AgingConfigUpdate, db: AsyncSession = Depends(get_db)):
+async def update_config(
+    config_id: int, payload: AgingConfigUpdate, db: AsyncSession = Depends(get_db)
+):
     try:
-        result = await db.execute(select(AgingConfig).where(AgingConfig.id == config_id))
-        config = result.scalar_one_or_none()
+        """update the aging config"""
+        config = await service.update_config(config_id, payload, db)
         if not config:
             raise HTTPException(status_code=404, detail=f"Aging config {config_id} not found.")
-
-        for key, value in payload.model_dump(exclude_unset=True, exclude={"run_hour", "run_minute"}).items():
-            setattr(config, key, value)
-
-        await db.commit()
-        await db.refresh(config)
         return config
-
     except HTTPException:
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not update aging config: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Could not update aging config: {str(e)}"
+        ) from e
 
 
 @router.delete("/aging-config/{config_id}")
 async def delete_config(config_id: int, db: AsyncSession = Depends(get_db)):
     try:
-        result = await db.execute(select(AgingConfig).where(AgingConfig.id == config_id))
-        config = result.scalar_one_or_none()
-        if not config:
+        """delete the configured data for aged reminders"""
+        deleted = await service.delete_config(config_id, db)
+        if not deleted:
             raise HTTPException(status_code=404, detail=f"Aging config {config_id} not found.")
-        await db.delete(config)
-        await db.commit()
         return {"status": "Deleted successfully."}
     except HTTPException:
         raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not delete aging config: {str(e)}")
-
+        raise HTTPException(
+            status_code=500, detail=f"Could not delete aging config: {str(e)}"
+        ) from e
 
 
 @router.get("/aging/reminders", response_model=list[ReminderLogResponse])
 async def get_all_reminders(db: AsyncSession = Depends(get_db)):
+    """fetch all the reminders sent to customer for overdue"""
     try:
-        result = await db.execute(
-            select(
-                ReminderLog,
-                Customer.name.label("customer_name"),
-                Customer.email.label("customer_email"),
-                InvoiceData.invoice_number.label("invoice_number"),
-            )
-            .join(Customer, ReminderLog.customer_id == Customer.id)
-            .join(InvoiceData, ReminderLog.invoice_id == InvoiceData.id)
-            .order_by(ReminderLog.sent_at.desc())
-        )
-        rows = result.all()
-
-        return [
-            ReminderLogResponse(
-                **row.ReminderLog.__dict__,
-                customer_name=row.customer_name,
-                customer_email=row.customer_email,
-                invoice_number=row.invoice_number,
-            )
-            for row in rows
-        ]
+        return await service.list_reminders(db)
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Could not fetch reminders.")
+        raise HTTPException(status_code=500, detail="Could not fetch reminders.") from e

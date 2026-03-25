@@ -1,11 +1,13 @@
-from src.data.clients.postgres_client import AsyncSessionLocal
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
+
 from src.config.jwt_handler import verify_access_token
+from src.data.clients.postgres_client import AsyncSessionLocal
 
 
 async def get_db():
     async with AsyncSessionLocal() as Session:
         yield Session
+
 
 async def get_current_user(request: Request):
     auth_header = request.headers.get("Authorization")
@@ -17,5 +19,3 @@ async def get_current_user(request: Request):
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return payload
-
-

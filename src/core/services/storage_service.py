@@ -1,15 +1,16 @@
-from google.cloud import storage
-import uuid
 import os
+import uuid
+
+from google.cloud import storage
 
 client = storage.Client()
 
 BUCKET_NAME = os.getenv("GCS_BUCKET")
 BASE_FOLDER = os.getenv("GCS_FOLDER", "paisavasool")
 
+
 async def save_file(file, document_type: str):
     try:
-
         if not BUCKET_NAME:
             raise ValueError("GCS_BUCKET not configured")
 
@@ -21,7 +22,6 @@ async def save_file(file, document_type: str):
             doc_type = "payments"
         else:
             raise ValueError(f"Invalid document_type: {document_type}")
-
 
         bucket = client.bucket(BUCKET_NAME)
 
@@ -35,11 +35,10 @@ async def save_file(file, document_type: str):
         content = await file.read()
 
         blob.upload_from_string(
-            content,
-            content_type=file.content_type or "application/octet-stream"
+            content, content_type=file.content_type or "application/octet-stream"
         )
 
         return file_path, ext, f"https://storage.googleapis.com/{BUCKET_NAME}/{file_path}"
 
-    except Exception as e:
+    except Exception:
         raise

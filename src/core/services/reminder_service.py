@@ -1,24 +1,28 @@
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
-import re
 import json
-from sqlalchemy import select, and_
+import re
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.data.models.postgres.invoice_data import InvoiceData
-from src.data.models.postgres.customer import Customer
-from src.data.models.postgres.aging_config import AgingConfig
-from src.data.models.postgres.reminder_log import ReminderLog
+
 from src.control.extraction.llm_client import get_llm
+from src.data.models.postgres.aging_config import AgingConfig
+from src.data.models.postgres.customer import Customer
+from src.data.models.postgres.invoice_data import InvoiceData
+from src.data.models.postgres.reminder_log import ReminderLog
 from src.utils.Email_util import send_email
 
 
 async def _get_last_reminder(invoice_id: int, db: AsyncSession) -> ReminderLog | None:
     result = await db.execute(
         select(ReminderLog)
-        .where(and_(
-            ReminderLog.invoice_id == invoice_id,
-            ReminderLog.status == "SENT",
-        ))
+        .where(
+            and_(
+                ReminderLog.invoice_id == invoice_id,
+                ReminderLog.status == "SENT",
+            )
+        )
         .order_by(ReminderLog.sent_at.desc())
         .limit(1)
     )
@@ -31,7 +35,7 @@ def _is_frequency_due(last_reminder: ReminderLog | None, frequency_days: int) ->
     if last_reminder.sent_at is None:
         return True
     last_date = last_reminder.sent_at.date()
-    next_due  = last_date + timedelta(days=frequency_days)
+    next_due = last_date + timedelta(days=frequency_days)
     return date.today() >= next_due
 
 
@@ -52,14 +56,16 @@ async def _generate_email(
 ) -> dict:
     pending_amount = Decimal(str(invoice.total_amount)) - Decimal(str(invoice.paid_amount))
     tone_guide = {
-        "LOW":      "Gentle and friendly. Just a soft nudge.",
-        "MEDIUM":   "Polite and friendly. Assume it was an oversight. No pressure.",
-        "HIGH":     "Firm and professional. Request immediate action. Mention consequences politely.",
+        "LOW": "Gentle and friendly. Just a soft nudge.",
+        "MEDIUM": "Polite and friendly. Assume it was an oversight. No pressure.",
+        "HIGH": "Firm and professional. Request immediate action. "
+        "Mention consequences politely.",
         "CRITICAL": "Urgent and formal. Mention escalation to senior management if not resolved.",
     }
 
     prompt = f"""
-            You are a professional finance associate writing a payment reminder email on behalf of PaisaVasool Finance Team.
+            You are a professional finance associate writing a payment reminder email on behalf of 
+            PaisaVasool Finance Team.
 
             Customer name  : {customer.name}
             Invoice number : {invoice.invoice_number}
@@ -98,29 +104,31 @@ async def _generate_email(
     llm = get_llm()
     try:
         response = await llm.ainvoke(prompt)
-        parsed   = _safe_json_parse(response.content)
+        parsed = _safe_json_parse(response.content)
         if not parsed:
             return _fallback_email()
         return {
             "subject": parsed.get("subject") or f"Payment Reminder — {invoice.invoice_number}",
-            "body":    parsed.get("body") or _fallback_email()["body"],
+            "body": parsed.get("body") or _fallback_email()["body"],
         }
     except Exception as llm_exc:
         print(f"[LLM FAILED] {llm_exc}")
         return _fallback_email()
 
 
-async def process_reminder(invoice: InvoiceData,days_overdue: int,config: AgingConfig,db: AsyncSession,) -> ReminderLog | None:
-    
+async def process_reminder(
+    invoice: InvoiceData,
+    days_overdue: int,
+    config: AgingConfig,
+    db: AsyncSession,
+) -> ReminderLog | None:
     frequency = config.reminder_frequency if config.reminder_frequency else 1
 
     last_reminder = await _get_last_reminder(invoice.id, db)
     if not _is_frequency_due(last_reminder, frequency):
         return None
 
-    customer_result = await db.execute(
-        select(Customer).where(Customer.id == invoice.customer_id)
-    )
+    customer_result = await db.execute(select(Customer).where(Customer.id == invoice.customer_id))
     customer = customer_result.scalar_one_or_none()
     if not customer:
         return None
@@ -129,31 +137,31 @@ async def process_reminder(invoice: InvoiceData,days_overdue: int,config: AgingC
         return None
     email = await _generate_email(customer, invoice, days_overdue, config.severity)
 
-    status        = "SENT"
+    status = "SENT"
     failure_reason = None
 
     try:
         print("before sending email")
         await send_email(
-            to      = customer.email,
-            subject = email["subject"],
-            body    = email["body"],
+            to=customer.email,
+            subject=email["subject"],
+            body=email["body"],
         )
-        
+
     except Exception as exc:
-        status         = "FAILED"
+        status = "FAILED"
         failure_reason = str(exc)
         print(failure_reason)
-        
+
     reminder = ReminderLog(
-        customer_id = customer.id,
-        invoice_id  = invoice.id,
-        severity    = config.severity,
-        subject     = email["subject"],
-        body        = email["body"],
-        channel     = "EMAIL",
-        status      = status,
-        sent_at     = datetime.now(timezone.utc) if status == "SENT" else None,
+        customer_id=customer.id,
+        invoice_id=invoice.id,
+        severity=config.severity,
+        subject=email["subject"],
+        body=email["body"],
+        channel="EMAIL",
+        status=status,
+        sent_at=datetime.now(UTC) if status == "SENT" else None,
     )
     db.add(reminder)
     await db.flush()
