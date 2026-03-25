@@ -1,11 +1,9 @@
 FROM python:3.13-slim
 
+# Create non-root user for security
+RUN useradd --create-home workeruser
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN chown workeruser:workeruser /app
 
 ENV PYTHONPATH=/app
 
@@ -13,6 +11,8 @@ COPY pyproject.toml .
 
 RUN pip install --no-cache-dir .
 
-COPY . .
+COPY --chown=workeruser:workeruser . .
+
+USER workeruser
 
 CMD ["python", "-c", "from src.worker import main; main()"]

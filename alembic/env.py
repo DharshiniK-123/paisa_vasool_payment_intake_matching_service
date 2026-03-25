@@ -13,17 +13,30 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+from src.data.clients.postgres_client import base
+from src.data.models.postgres import (
+    aging_config,
+    customer,
+    document,
+    exchange_rate,
+    invoice_data,
+    matching_payment_invoice,
+    payment_detail,
+    reminder_log,
+    scheduler_settings,
+)
+
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+
+from src.config.settings import settings
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -37,7 +50,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://").replace("%", "%%")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -56,6 +69,9 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("%", "%%")
+    config.set_main_option("sqlalchemy.url", url)
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
