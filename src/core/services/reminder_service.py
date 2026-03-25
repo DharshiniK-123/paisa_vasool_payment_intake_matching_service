@@ -2,6 +2,7 @@ import json
 import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any, cast
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,14 +37,14 @@ def _is_frequency_due(last_reminder: ReminderLog | None, frequency_days: int) ->
         return True
     last_date = last_reminder.sent_at.date()
     next_due = last_date + timedelta(days=frequency_days)
-    return date.today() >= next_due
+    return bool(date.today() >= next_due)
 
 
 def _safe_json_parse(raw: str) -> dict | None:
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE)
     try:
-        return json.loads(cleaned.strip())
+        return cast(dict[Any, Any], json.loads(cleaned.strip()))
     except json.JSONDecodeError:
         return None
 
@@ -124,8 +125,8 @@ async def process_reminder(
 ) -> ReminderLog | None:
     frequency = config.reminder_frequency if config.reminder_frequency else 1
 
-    last_reminder = await _get_last_reminder(invoice.id, db)
-    if not _is_frequency_due(last_reminder, frequency):
+    last_reminder = await _get_last_reminder(int(invoice.id), db)
+    if not _is_frequency_due(last_reminder, int(frequency)):
         return None
 
     customer_result = await db.execute(select(Customer).where(Customer.id == invoice.customer_id))
@@ -135,7 +136,7 @@ async def process_reminder(
 
     if not customer.email:
         return None
-    email = await _generate_email(customer, invoice, days_overdue, config.severity)
+    email = await _generate_email(customer, invoice, days_overdue, str(config.severity))
 
     status = "SENT"
     failure_reason = None
@@ -143,7 +144,7 @@ async def process_reminder(
     try:
         print("before sending email")
         await send_email(
-            to=customer.email,
+            to=str(customer.email),
             subject=email["subject"],
             body=email["body"],
         )

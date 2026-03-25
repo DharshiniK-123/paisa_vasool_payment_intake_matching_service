@@ -67,8 +67,8 @@ async def start_scheduler_from_db():
             db.add(settings)
             await db.commit()
         elif settings.is_enabled:
-            hour = settings.run_hour
-            minute = settings.run_minute
+            hour = int(settings.run_hour)
+            minute = int(settings.run_minute)
 
     await reschedule_aging_job(hour, minute)
 

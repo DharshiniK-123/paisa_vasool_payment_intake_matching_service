@@ -1,4 +1,5 @@
 from datetime import date
+from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +33,7 @@ async def get_overdue_invoices_with_bucket(db: AsyncSession) -> list[dict]:
 
     result = []
     for invoice in invoices:
-        days_overdue = calculate_days_overdue(invoice.due_date)
+        days_overdue = calculate_days_overdue(cast(date, invoice.due_date))
         config = assign_aging_bucket(days_overdue, configs)
         if config is None:
             continue

@@ -139,7 +139,7 @@ async def soft_delete_invoice(invoice_id: int, db: AsyncSession) -> None:
     invoice = result.scalar_one_or_none()
     if not invoice:
         return
-    invoice.is_deleted = True
+    invoice.is_deleted = True  # type: ignore[assignment]
 
     matching_result = await db.execute(
         select(MatchingPaymentInvoice).where(
@@ -180,7 +180,7 @@ async def soft_delete_payment(payment_id: int, db: AsyncSession) -> None:
     payment = result.scalar_one_or_none()
     if not payment:
         return
-    payment.is_deleted = True
+    payment.is_deleted = True  # type: ignore[assignment]
     await db.commit()
 
 

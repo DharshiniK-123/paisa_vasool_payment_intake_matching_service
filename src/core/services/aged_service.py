@@ -1,4 +1,5 @@
 from datetime import date
+from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,7 +50,7 @@ async def get_overdue_invoices_with_bucket(db: AsyncSession) -> list[dict]:
 
     result = []
     for invoice in invoices:
-        days_overdue = calculate_days_overdue(invoice.due_date)
+        days_overdue = calculate_days_overdue(cast(date, invoice.due_date))
         config = assign_aging_bucket(days_overdue, configs)
         if config is None:
             continue
@@ -95,8 +96,8 @@ async def delete_config(config_id: int, db: AsyncSession) -> bool:
 
 async def get_scheduler(db: AsyncSession) -> dict:
     row = await repo.get_scheduler_settings(db)
-    utc_hour = row.run_hour if row else 9
-    utc_minute = row.run_minute if row else 0
+    utc_hour = int(row.run_hour) if row else 9
+    utc_minute = int(row.run_minute) if row else 0
     ist_hour, ist_minute = utc_to_ist(utc_hour, utc_minute)
     return {
         "run_hour": ist_hour,

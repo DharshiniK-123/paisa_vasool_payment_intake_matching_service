@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 
 from fastapi import HTTPException
 from langchain_core.messages import HumanMessage
@@ -110,7 +110,7 @@ def _safe_json_parse(raw: str) -> dict | None:
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"\s*```$", "", cleaned.strip(), flags=re.MULTILINE)
     try:
-        return json.loads(cleaned.strip())
+        return cast(dict[Any, Any], json.loads(cleaned.strip()))
     except json.JSONDecodeError:
         return None
 
@@ -271,7 +271,7 @@ async def _extract_from_image(image_content: dict, document_type: str) -> dict:
                 ),
             ) from exc
 
-        return validated.model_dump(exclude={"mismatch", "detected_type"})
+        return cast(dict[Any, Any], validated.model_dump(exclude={"mismatch", "detected_type"}))
 
     except HTTPException:
         raise

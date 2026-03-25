@@ -16,8 +16,10 @@ Each concern lives in its own module:
 """
 
 import logging
+from datetime import date
 from decimal import Decimal
 
+from typing import cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -213,9 +215,9 @@ async def run_matching_for_payment(payment_id: int, db: AsyncSession) -> list:
     # ── 3. Validate ──────────────────────────────────────────────────────────
     validation_error = _validate_payment(payment)
     if validation_error:
-        rec = await save_failed_match(payment_id, validation_error, db)
+        rec: MatchingPaymentInvoice | None = await save_failed_match(payment_id, validation_error, db)
         await db.commit()
-        return [rec]
+        return [rec] if rec else []
 
     pay_amount    = Decimal(str(payment.payment_amount))
     remaining_pay = pay_amount
@@ -228,9 +230,9 @@ async def run_matching_for_payment(payment_id: int, db: AsyncSession) -> list:
 
     if not candidates.has_open():
         reason = candidates.best_failure_reason(payment, invoice_nos)
-        rec    = await save_failed_match(payment_id, reason, db)
+        rec = await save_failed_match(payment_id, reason, db)
         await db.commit()
-        return [rec]
+        return [rec] if rec else []
 
     # ── 5. Same-currency matches ─────────────────────────────────────────────
     for invoice in candidates.same_currency:
@@ -254,9 +256,9 @@ async def run_matching_for_payment(payment_id: int, db: AsyncSession) -> list:
 
         try:
             fx_rate = await get_exchange_rate(
-                payment.paid_date,
-                payment.currency,
-                invoice.currency,
+                cast(date, payment.paid_date),
+                str(payment.currency),
+                str(invoice.currency),
                 db,
             )
         except RuntimeError as exc:
@@ -266,7 +268,7 @@ async def run_matching_for_payment(payment_id: int, db: AsyncSession) -> list:
                 f"'{invoice.invoice_number}' is in {invoice.currency}. "
                 f"Automatic FX conversion failed: {exc}. Manual review required.",
                 db,
-                invoice_id=invoice.id,
+                invoice_id=int(invoice.id),
             )
             records.append(rec)
             continue
@@ -321,7 +323,7 @@ async def run_matching_for_payment(payment_id: int, db: AsyncSession) -> list:
         if r.invoice_id and r.match_status in ("FULL", "PARTIAL", "OVERPAYMENT")
     }
     for invoice_id in matched_invoice_ids:
-        await update_invoice_status(invoice_id, db)
+        await update_invoice_status(int(invoice_id), db)
 
     await db.commit()
 

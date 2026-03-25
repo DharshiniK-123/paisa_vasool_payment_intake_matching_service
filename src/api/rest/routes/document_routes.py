@@ -66,7 +66,7 @@ async def upload_document(
 async def get_job_status(job_id: str, user: dict = Depends(get_current_user)):
     """Status of the rq worker"""
     try:
-        data = await redis_client.get(f"job:{job_id}")
+        data = await redis_client.get(f"job:{job_id}") if redis_client else None
         if not data:
             return {
                 "job_id": job_id,

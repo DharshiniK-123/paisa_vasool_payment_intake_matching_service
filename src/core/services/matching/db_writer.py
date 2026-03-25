@@ -162,15 +162,15 @@ async def update_invoice_status(invoice_id: int, db: AsyncSession) -> None:
 
     total_matched           = await get_already_matched_amount(invoice_id, db)
     total                   = Decimal(str(invoice.total_amount))
-    invoice.paid_amount     = total_matched
+    invoice.paid_amount     = total_matched  # type: ignore[assignment]
 
     if has_overpayment or total_matched > total:
-        invoice.payment_status = "OVERPAID"
+        invoice.payment_status = "OVERPAID"  # type: ignore[assignment]
     elif total_matched == total:
-        invoice.payment_status = "PAID"
+        invoice.payment_status = "PAID"  # type: ignore[assignment]
     elif total_matched > 0:
-        invoice.payment_status = "PARTIALLY_PAID"
+        invoice.payment_status = "PARTIALLY_PAID"  # type: ignore[assignment]
     else:
-        invoice.payment_status = "UNPAID"
+        invoice.payment_status = "UNPAID"  # type: ignore[assignment]
 
     await db.flush()

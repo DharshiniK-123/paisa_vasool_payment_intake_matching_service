@@ -42,7 +42,7 @@ def _extract_from_pdf_sync(storage_path: str) -> str:
                 status_code=422,
                 detail="PDF appears to be empty or scanned. Only text-based PDFs are supported",
             )
-        return text
+        return str(text)
     except HTTPException:
         raise
     except Exception as e:
