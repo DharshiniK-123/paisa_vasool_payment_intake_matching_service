@@ -21,7 +21,6 @@ def _is_transient_http_error(exc: Exception) -> bool:
     if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        # Retry on 429 (Rate Limit) or 5xx (Server Error)
         return exc.response.status_code == 429 or exc.response.status_code >= 500
     return False
 
@@ -78,7 +77,6 @@ async def get_exchange_rate(
                     f"Frankfurter request failed for {from_cur}→{to_cur} on {rate_date}: {exc}"
                 ) from exc
     else:
-        # This part is technically reached if the loop finished without break or raise
         raise last_exc
 
     rates: dict = data.get("rates", {})

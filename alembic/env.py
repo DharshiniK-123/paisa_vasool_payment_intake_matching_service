@@ -69,7 +69,7 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("%", "%%")
+    url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://").replace("%", "%%")
     config.set_main_option("sqlalchemy.url", url)
 
     connectable = engine_from_config(

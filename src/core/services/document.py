@@ -19,7 +19,7 @@ from src.core.services.extraction_service import extract_text
 from src.core.services.matching import run_matching_for_payment
 from src.core.services.storage_service import save_file
 from src.core.tasks.document_task import process_document_task, process_document_task_sync
-from src.data.clients.redis_clients import redis_client, redis_connection
+from src.data.clients.redis_clients import get_async_redis_client, redis_connection
 from src.data.models.postgres.customer import Customer
 from src.data.models.postgres.document import Document
 from src.data.models.postgres.invoice_data import InvoiceData
@@ -236,8 +236,13 @@ async def save_document_records(
                 count += 1
 
             await update_instance_by_id(document_id, Document, db, status="PARSED")
-            if redis_client:
-                await redis_client.delete(f"preview:{document_id}")
+
+            try:
+                redis = get_async_redis_client()
+                await redis.delete(f"preview:{document_id}")
+                await redis.aclose()
+            except Exception as e:
+                logger.warning("redis_preview_delete_failed", extra={"error": str(e)})
 
             return count
     finally:
