@@ -41,7 +41,7 @@ DATE_FIELDS = ("invoice_date", "due_date", "payment_date", "transaction_date", "
 
 
 def _make_session():
-    engine = create_async_engine(os.getenv("DATABASE_URL"))
+    engine = create_async_engine(str(os.getenv("DATABASE_URL")))
     factory = async_sessionmaker(bind=engine, class_=AsyncSession, autoflush=False)
     return engine, factory()
 
@@ -296,7 +296,7 @@ async def _rematch_pending_payments_for_invoice(
             "rematch_pending_payment",
             extra={"payment_id": payment.id, "invoice_number": invoice_number},
         )
-        await run_matching_for_payment(payment.id, db)
+        await run_matching_for_payment(int(payment.id), db)
 
 
 async def _extract_single(raw_text: str, document_type: str) -> list[dict]:
@@ -340,7 +340,7 @@ async def _resolve_customer(
 
     existing = await get_instance_by_any(Customer, db, {"email": email})
     if existing:
-        return existing.id
+        return int(existing.id)
 
     if document_type == "INVOICE":
         from src.data.repositories.generic_repository import insert_instance
@@ -352,7 +352,7 @@ async def _resolve_customer(
             email=email,
         )
         created = await get_instance_by_any(Customer, db, {"email": email})
-        return created.id
+        return int(created.id)
 
     raise HTTPException(
         status_code=422,

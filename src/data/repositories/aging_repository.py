@@ -68,9 +68,9 @@ async def upsert_scheduler_settings(
 
         db.add(row)
     else:
-        row.run_hour = utc_hour
-        row.run_minute = utc_minute
-        row.is_enabled = is_enabled
+        row.run_hour = utc_hour  # type: ignore[assignment]
+        row.run_minute = utc_minute  # type: ignore[assignment]
+        row.is_enabled = is_enabled  # type: ignore[assignment]
     await db.commit()
     return row
 

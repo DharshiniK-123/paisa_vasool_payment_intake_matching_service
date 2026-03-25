@@ -28,7 +28,7 @@ class CandidateSet:
         Centralises all the 'already paid / deleted / not found' messaging.
         """
         for inv in self.already_paid:
-            inv_num = _normalize(inv.invoice_number or "")
+            inv_num = _normalize(str(inv.invoice_number or ""))
             if any(n == inv_num or inv_num in n or n in inv_num for n in invoice_nos):
                 return (
                     f"Invoice '{inv.invoice_number}' has already been fully paid by a "
@@ -37,7 +37,7 @@ class CandidateSet:
                 )
 
         for inv in self.deleted:
-            inv_num = _normalize(inv.invoice_number or "")
+            inv_num = _normalize(str(inv.invoice_number or ""))
             if any(n == inv_num or inv_num in n or n in inv_num for n in invoice_nos):
                 return (
                     f"Invoice '{inv.invoice_number}' exists but has been deleted/archived "
@@ -107,7 +107,7 @@ class CandidateFetcher:
         fx_mismatch:   list[InvoiceData] = []
 
         for inv in open_invoices:
-            inv_num    = _normalize(inv.invoice_number or "")
+            inv_num    = _normalize(str(inv.invoice_number or ""))
             number_hit = any(
                 n == inv_num or inv_num in n or n in inv_num
                 for n in invoice_nos
