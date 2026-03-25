@@ -6,3 +6,4 @@ uploads/
 app.log
 *.zip
 *.zip.*
+deploy.sh

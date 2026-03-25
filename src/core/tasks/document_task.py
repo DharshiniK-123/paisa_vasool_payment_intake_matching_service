@@ -19,14 +19,18 @@ def _dumps(obj) -> str:
     return json.dumps(obj, cls=_SafeEncoder)
 
 
-async def safe_redis_setex(key: str, ttl: int, value: str):
+async def safe_redis_setex(key: str, ttl: int, value: str, redis_client=None):
+    """
+    Write a key to Redis. Accepts an explicit redis_client so that callers
+    running inside a worker-created event loop can pass a freshly created
+    client that is bound to the correct loop.
+    """
     try:
-        from src.data.clients.redis_clients import redis_client
+        if redis_client is None:
+            from src.data.clients.redis_clients import get_async_redis_client
+            redis_client = get_async_redis_client()
 
-        if redis_client:
-            await redis_client.setex(key, ttl, value)
-        else:
-            print("Redis client not available — skipping cache")
+        await redis_client.setex(key, ttl, value)
     except Exception as e:
         print(f"Redis error for key {key}: {str(e)}")
         raise
@@ -39,6 +43,7 @@ async def process_document_task(
     file_url: str,
     document_type: str,
     job_id: str,
+    redis_client=None,
 ) -> None:
     from src.core.services.document import extract_document_data
 
@@ -46,6 +51,7 @@ async def process_document_task(
         f"job:{job_id}",
         JOB_TTL,
         _dumps({"status": "PROCESSING", "document_id": document_id}),
+        redis_client=redis_client,
     )
 
     try:
@@ -61,6 +67,7 @@ async def process_document_task(
             f"preview:{document_id}",
             PREVIEW_TTL,
             _dumps(extracted_records),
+            redis_client=redis_client,
         )
 
         await safe_redis_setex(
@@ -74,6 +81,7 @@ async def process_document_task(
                     "preview_data": extracted_records,
                 }
             ),
+            redis_client=redis_client,
         )
 
     except Exception as exc:
@@ -88,6 +96,7 @@ async def process_document_task(
                     "error": error_detail,
                 }
             ),
+            redis_client=redis_client,
         )
         raise
 
@@ -102,8 +111,13 @@ def process_document_task_sync(
 ) -> None:
     import asyncio
 
+    from src.data.clients.redis_clients import get_async_redis_client
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    redis_client = get_async_redis_client()
+
     try:
         loop.run_until_complete(
             process_document_task(
@@ -113,9 +127,14 @@ def process_document_task_sync(
                 file_url=file_url,
                 document_type=document_type,
                 job_id=job_id,
+                redis_client=redis_client,
             )
         )
     except Exception:
         raise
     finally:
+        try:
+            loop.run_until_complete(redis_client.aclose())
+        except Exception:
+            pass
         loop.close()
