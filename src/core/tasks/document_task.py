@@ -19,12 +19,12 @@ def _dumps(obj) -> str:
     return json.dumps(obj, cls=_SafeEncoder)
 
 
-def safe_redis_setex(key: str, ttl: int, value: str):
+async def safe_redis_setex(key: str, ttl: int, value: str):
     try:
-        from src.data.clients.redis_clients import redis_connection
+        from src.data.clients.redis_clients import redis_client
 
-        if redis_connection:
-            redis_connection.setex(key, ttl, value)
+        if redis_client:
+            await redis_client.setex(key, ttl, value)
         else:
             print("Redis client not available — skipping cache")
     except Exception as e:
@@ -42,7 +42,7 @@ async def process_document_task(
 ) -> None:
     from src.core.services.document import extract_document_data
 
-    safe_redis_setex(
+    await safe_redis_setex(
         f"job:{job_id}",
         JOB_TTL,
         _dumps({"status": "PROCESSING", "document_id": document_id}),
@@ -57,13 +57,13 @@ async def process_document_task(
             document_type=document_type,
         )
 
-        safe_redis_setex(
+        await safe_redis_setex(
             f"preview:{document_id}",
             PREVIEW_TTL,
             _dumps(extracted_records),
         )
 
-        safe_redis_setex(
+        await safe_redis_setex(
             f"job:{job_id}",
             JOB_TTL,
             _dumps(
@@ -78,7 +78,7 @@ async def process_document_task(
 
     except Exception as exc:
         error_detail = getattr(exc, "detail", str(exc))
-        safe_redis_setex(
+        await safe_redis_setex(
             f"job:{job_id}",
             JOB_TTL,
             _dumps(

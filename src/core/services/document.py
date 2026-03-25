@@ -107,7 +107,8 @@ async def upload_document_and_enqueue(
             q = Queue(connection=redis_connection)
             print(q)
             print("before calling process_document_task_sync")
-            q.enqueue(
+            await asyncio.to_thread(
+                q.enqueue,
                 process_document_task_sync,
                 kwargs=kwargs,
                 job_timeout=900,

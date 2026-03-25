@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TEXT_CHARS = 40_000
 LLM_TIMEOUT_SECS = 120
-MAX_RETRIES = 2
+MAX_RETRIES = 3
 
 
 class InvoiceExtraction(BaseModel):
@@ -153,7 +153,17 @@ def _handle_llm_error(e: Exception, document_type: str) -> NoReturn:
 
 
 def _is_transient(e: Exception) -> bool:
-    transient_phrases = ("rate limit", "timeout", "503", "502", "connection")
+    transient_phrases = (
+        "rate limit",
+        "timeout",
+        "503",
+        "502",
+        "504",
+        "connection",
+        "overloaded",
+        "server_error",
+        "service_unavailable",
+    )
     return any(p in str(e).lower() for p in transient_phrases)
 
 
@@ -175,6 +185,7 @@ async def _invoke_with_retry(chain, input_value, retries: int = MAX_RETRIES):
                 await asyncio.sleep(wait)
                 last_exc = e
             else:
+                logger.error("llm_max_retries_exceeded", extra={"error": str(e)})
                 raise
     raise last_exc
 

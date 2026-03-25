@@ -1,5 +1,8 @@
 .env
 *.env
 .env.*
-node_modulesuploads/
+node_modules/
+uploads/
 app.log
+*.zip
+*.zip.*
