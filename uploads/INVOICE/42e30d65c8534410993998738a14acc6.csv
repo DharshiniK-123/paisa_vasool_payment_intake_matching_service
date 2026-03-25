@@ -1,6 +1,0 @@
-invoice_number,invoice_date,due_date,total_amount,currency,customer_email,gl_code
-MX-2024-01,2024-03-01,2024-03-31,150000.0,INR,cfo@megacorp.in,PROJ-MX-01
-MX-2024-02,2024-03-05,2024-04-04,230000.0,INR,finance@bizsol.com,PROJ-MX-02
-MX-2024-03,2024-03-10,2024-04-09,89500.5,INR,accounts@retailco.in,PROJ-MX-03
-MX-2024-04,2024-03-15,2024-04-14,412000.0,INR,payments@infraltd.com,PROJ-MX-04
-MX-2024-05,2024-03-20,2024-04-19,67800.0,INR,billing@startupx.io,PROJ-MX-05

@@ -1,6 +1,0 @@
-invoice_no,payment_amount,paid_date,payment_reference,currency,customer_name,customer_email
-MP-2024-0728,23371.60,25-08-2024,SEPA24082500345,EUR,Sophie Laurent,sophie.laurent@lumiere-tech.fr
-EU-2024-882,14500.00,20-03-2024,,EUR,Marie Dupont,marie.d@frenchfirm.fr
-EU-2024-883,6200.50,25-03-2024,SEPA24032500891,EUR,Luca Rossi,luca.rossi@italco.it
-EU-2024-884,18900.00,01-04-2024,,EUR,Sofia Garcia,s.garcia@spanishbiz.es
-EU-2024-885,7750.00,30-03-2024,SEPA24033000123,EUR,Anna Kowalski,anna.k@polandinc.pl

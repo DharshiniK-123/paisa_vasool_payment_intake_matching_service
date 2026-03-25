@@ -1,18 +1,20 @@
 FROM python:3.13-slim
 
+# Create non-root user for security compliance
+RUN useradd --create-home appuser
 WORKDIR /app
+RUN chown appuser:appuser /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy dependency files first (for caching)
+COPY pyproject.toml .
 
-ENV PYTHONPATH=/app
+# Install project
+RUN pip install --no-cache-dir .
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy app and set ownership
+COPY --chown=appuser:appuser . .
 
-COPY . .
+USER appuser
 
 EXPOSE 8080
 

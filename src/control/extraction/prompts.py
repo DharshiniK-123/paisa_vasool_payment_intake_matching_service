@@ -18,7 +18,8 @@ STEP 3 — If this IS an INVOICE:
   invoice_number : The invoice ID. If missing → set mismatch=true, detected_type=UNKNOWN.
   invoice_date   : Convert any date format to YYYY-MM-DD (e.g. "Oct 25 2012" → "2012-10-25").
   due_date       : Convert to YYYY-MM-DD. If absent, use invoice_date + 30 days.
-  total_amount   : Final payable amount as a plain number (Balance Due > Grand Total > Total > Amount Due).
+  total_amount   : Final payable amount as a plain number 
+                  (Balance Due > Grand Total > Total > Amount Due).
                    If zero or missing → set mismatch=true, detected_type=UNKNOWN.
   currency       : Infer from symbol: $=USD  ₹/Rs=INR  €=EUR  £=GBP. Default USD if unclear.
   customer_name  : Customer or bill-to name. null if not present.
