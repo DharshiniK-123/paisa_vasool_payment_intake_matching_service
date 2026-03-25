@@ -1,7 +1,9 @@
 import os
+
 import httpx
 
 WORKER_SERVICE_URL = os.getenv("WORKER_SERVICE_URL", "")
+
 
 async def trigger_worker():
     if not WORKER_SERVICE_URL:

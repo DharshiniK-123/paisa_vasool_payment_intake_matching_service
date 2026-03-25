@@ -1,0 +1,374 @@
+# Payment Intake & Matching Service
+
+A FastAPI microservice that ingests invoice and payment documents, extracts structured data using LLMs, and automatically matches payments to invoices using a multi-strategy scoring pipeline.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Environment Variables](#environment-variables)
+- [Local Setup](#local-setup)
+- [Database Migrations](#database-migrations)
+- [Running the Service](#running-the-service)
+- [Running the RQ Worker](#running-the-rq-worker)
+- [API Endpoints](#api-endpoints)
+- [Matching Pipeline](#matching-pipeline)
+- [Deployment](#deployment)
+
+---
+
+## Overview
+
+This service handles the full lifecycle of payment reconciliation:
+
+1. **Document Upload** — Accepts invoice or payment PDFs/images (up to 10 MB) via REST.
+2. **LLM Extraction** — Extracts structured fields (amounts, dates, invoice numbers, customer info) using Groq and Google Gemini Vision, with retry logic and mismatch detection.
+3. **Background Processing** — Extraction runs in an RQ worker queue so uploads return immediately with a `job_id`.
+4. **Matching** — A configurable scoring pipeline matches payments to invoices across five strategies: invoice number, customer, currency, amount, and closes-balance.
+5. **Aging & Reminders** — A scheduled job classifies overdue invoices by severity and sends email reminders based on configurable aging rules.
+6. **WebSocket** — Real-time aging updates are pushed to connected clients.
+
+---
+
+## Architecture
+
+```
+Client
+  │
+  ▼
+API Gateway
+  │
+  ├── FastAPI (this service)
+  │     ├── /documents   — upload, status polling, CRUD
+  │     ├── /matching    — scores, dashboard, discrepancies
+  │     └── /aging-config, /scheduler — aging rules & reminders
+  │
+  ├── Redis
+  │     ├── Job status cache  (key: job:<job_id>,     TTL 1h)
+  │     └── Preview cache     (key: preview:<doc_id>, TTL 10m)
+  │
+  ├── RQ Worker (worker.py)
+  │     └── process_document_task_sync → LLM extraction → DB write
+  │
+  ├── PostgreSQL
+  │     ├── documents, invoice_data, payment_details
+  │     ├── matching_payment_invoice
+  │     ├── customers, aging_config, reminder_log
+  │     └── scheduler_settings, exchange_rates
+  │
+  └── Google Cloud Storage
+        └── Raw document files
+```
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|---|---|
+| API framework | FastAPI + Uvicorn |
+| Database ORM | SQLAlchemy (async) + asyncpg |
+| Migrations | Alembic + Flyway SQL scripts |
+| Task queue | RQ (Redis Queue) |
+| Cache | Redis (sync + async clients) |
+| LLM — text | Groq (LangChain) |
+| LLM — vision | Google Gemini Vision |
+| File storage | Google Cloud Storage |
+| Scheduler | APScheduler |
+| Email | FastMail |
+| Deployment | Google Cloud Run |
+
+---
+
+## Project Structure
+
+```
+src/
+├── api/
+│   ├── migrations/          # Flyway SQL migration scripts (V1–V9)
+│   └── rest/
+│       ├── app.py           # FastAPI app, lifespan, router registration
+│       ├── dependencies.py  # DB session, JWT auth dependencies
+│       └── routes/
+│           ├── document_routes.py   # Upload, job status, CRUD
+│           ├── matching_router.py   # Match queries, dashboard
+│           └── aged_router.py       # Aging config, scheduler, reminders
+├── config/
+│   ├── settings.py          # Pydantic settings (all env vars)
+│   ├── jwt_handler.py
+│   └── matching_config.py
+├── control/
+│   └── extraction/
+│       ├── Llm_extractor.py # LLM extraction logic (text + vision)
+│       ├── llm_client.py    # Groq / Gemini client factory
+│       └── prompts.py       # Extraction prompt templates
+├── core/
+│   ├── services/
+│   │   ├── document.py          # Upload orchestration, GCS, enqueue
+│   │   ├── document_service.py  # Business logic helpers
+│   │   ├── extraction_service.py
+│   │   ├── matching_service.py  # Dashboard, detail queries
+│   │   ├── aging_service.py
+│   │   ├── aged_service.py
+│   │   ├── reminder_service.py
+│   │   ├── scheduler.py         # APScheduler setup
+│   │   └── matching/
+│   │       ├── pipeline.py          # Scoring pipeline runner
+│   │       ├── candidate_fetcher.py
+│   │       ├── resolver.py
+│   │       ├── db_writer.py
+│   │       └── strategies/          # One file per scoring strategy
+│   │           ├── base.py
+│   │           ├── invoice_number_strategy.py
+│   │           ├── customer_strategy.py
+│   │           ├── currency_strategy.py
+│   │           ├── amount_strategy.py
+│   │           └── closes_balance_strategy.py
+│   └── tasks/
+│       └── document_task.py     # RQ task + Redis status writes
+├── data/
+│   ├── clients/
+│   │   ├── postgres_client.py   # Async SQLAlchemy engine + session
+│   │   └── redis_clients.py     # Sync (RQ) + async (FastAPI) Redis
+│   ├── models/postgres/         # SQLAlchemy ORM models
+│   └── repositories/            # DB query layer
+├── observability/
+│   └── logging.py
+├── schemas/
+│   └── payment_intake_matching.py  # Pydantic request/response schemas
+├── utils/
+│   ├── fx_client.py
+│   ├── normalize.py
+│   └── worker_trigger.py
+└── worker.py                    # RQ worker entrypoint (with health endpoint)
+```
+
+---
+
+## Environment Variables
+
+Create a `.env` file in the project root. All fields are required unless a default is shown.
+
+```env
+# Runtime
+ENV=development
+LOG_LEVEL=INFO
+
+# PostgreSQL
+DB_USER=
+DB_PASSWORD=
+DB_HOST=
+DB_PORT=5432
+DB_NAME=
+
+# Redis
+REDIS_HOST=
+REDIS_PORT=6379
+
+# LLM APIs
+GROQ_API_KEY=
+GOOGLE_API_KEY=
+
+# JWT
+JWT_SECRET_KEY=
+JWT_REFRESH_SECRET_KEY=
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_MINUTES=60
+JWT_REFRESH_SECRET_KEY_EXPIRATION_DAYS=7
+
+# Email (FastMail)
+MAIL_USERNAME=
+MAIL_PASSWORD=
+MAIL_FROM=
+MAIL_SERVER=
+MAIL_PORT=587
+MAIL_STARTTLS=true
+MAIL_SSL_TLS=false
+
+# Google Cloud Storage
+GCS_BUCKET=
+
+# Misc
+HTTP_TIMEOUT=30
+```
+
+---
+
+## Local Setup
+
+**Prerequisites:** Python 3.12+, PostgreSQL, Redis
+
+```bash
+# Clone and enter the service directory
+cd payment_intake_matching_service
+
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy and fill in environment variables
+cp .env.example .env
+```
+
+---
+
+## Database Migrations
+
+The service uses both Alembic (for the ORM schema) and Flyway SQL scripts under `src/api/migrations/`.
+
+```bash
+# Initialise Alembic (first time only)
+alembic init alembic
+
+# Set sqlalchemy.url in alembic.ini, or export DATABASE_URL and
+# add this to alembic/env.py:
+#   import os
+#   config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+
+# Stamp existing DB as up-to-date (if schema already exists)
+python -m alembic stamp head
+
+# Generate a new migration from model changes
+python -m alembic revision --autogenerate -m "description"
+
+# Apply migrations
+python -m alembic upgrade head
+```
+
+SQL scripts in `src/api/migrations/` follow Flyway naming (`V1__...sql` through `V9__...sql`) and create the core tables: `aging_config`, `customers`, `documents`, `invoice_data`, `payment_details`, `matching_payment_invoice`, `reminder_log`, `scheduler_settings`, `exchange_rates`.
+
+---
+
+## Running the Service
+
+```bash
+# Development
+uvicorn src.api.rest.app:app --reload --port 8000
+
+# Production
+uvicorn src.api.rest.app:app --host 0.0.0.0 --port 8080
+```
+
+Interactive API docs are available at `http://localhost:8000/docs`.
+
+---
+
+## Running the RQ Worker
+
+The worker runs separately from the API. It exposes a `/health` endpoint on port 8080 for Cloud Run health checks.
+
+```bash
+python src/worker.py
+```
+
+The worker connects to the same Redis instance and processes jobs from the `default` queue. It uses `SimpleWorker` (single-threaded, no forking) — suitable for Cloud Run's single-process containers.
+
+---
+
+## API Endpoints
+
+All endpoints are prefixed with `/api/v1/payment_intake_matching` and require a JWT Bearer token unless noted.
+
+### Documents
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/documents/upload?document_type=INVOICE\|PAYMENT` | Upload a file; returns `job_id` immediately |
+| `GET` | `/documents/jobs/{job_id}/status` | Poll extraction status (`PROCESSING`, `EXTRACTED`, `FAILED`) |
+| `GET` | `/documents/` | List all documents |
+| `GET` | `/documents/{document_id}` | Get a single document |
+| `GET` | `/documents/{document_id}/invoices` | Get extracted invoices with match status |
+| `GET` | `/documents/{document_id}/payments` | Get extracted payments |
+| `POST` | `/documents/{document_id}/save` | Persist reviewed records to the database |
+| `GET` | `/documents/stats` | Aggregate user statistics |
+| `DELETE` | `/documents/invoices/{invoice_id}` | Soft-delete an invoice |
+| `DELETE` | `/documents/payments/{payment_id}` | Soft-delete a payment |
+
+### Matching
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/matching/payment/{payment_id}` | All matches for a payment |
+| `GET` | `/matching/invoice/{invoice_id}` | All matches for an invoice |
+| `GET` | `/matching/invoice-detail/{invoice_id}` | Full invoice detail with matches |
+| `GET` | `/matching/payment-detail/{payment_id}` | Full payment detail with matches |
+| `GET` | `/matching/dashboard/summary` | Matched / unmatched totals |
+| `GET` | `/matching/dashboard/unmatched-payments` | Unmatched payments list |
+| `GET` | `/matching/dashboard/unmatched-invoices` | Unmatched invoices list |
+| `GET` | `/matching/dashboard/recent?limit=20` | Most recent matches |
+| `GET` | `/matching/dashboard/discrepancies` | Amount discrepancies across matches |
+
+### Aging & Reminders
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/aging/run` | Manually trigger the aging + reminder job |
+| `GET` | `/aging-config/` | List all aging configs |
+| `POST` | `/aging-config/` | Create an aging config |
+| `GET` | `/aging-config/{config_id}` | Get a config |
+| `PUT` | `/aging-config/{config_id}` | Update a config |
+| `DELETE` | `/aging-config/{config_id}` | Delete a config |
+| `GET` | `/aging/reminders` | List all reminder logs |
+| `GET` | `/scheduler/settings` | Get scheduler settings |
+| `PUT` | `/scheduler/settings` | Update scheduler time and enable/disable |
+| `GET` | `/scheduler/status` | Live scheduler status and next run time |
+
+### WebSocket
+
+| Path | Description |
+|---|---|
+| `WS /ws/aging` | Real-time aging updates stream |
+
+---
+
+## Matching Pipeline
+
+Payments are matched to invoices through a five-strategy scoring pipeline. Strategies run in order; any strategy can hard-disqualify a candidate (score drops to 0 immediately).
+
+| Order | Strategy | Behaviour |
+|---|---|---|
+| 1 | **Invoice Number** | Hard-disqualifies if no invoice number overlap is found |
+| 2 | **Customer** | Scores name similarity; penalises mismatches |
+| 3 | **Currency** | Hard-disqualifies on currency mismatch; bonus for exact match |
+| 4 | **Amount** | Scores how closely the payment covers the invoice amount |
+| 5 | **Closes Balance** | Bonus if the payment exactly zeros out the outstanding balance |
+
+Scores from all passing strategies are summed and capped at 100. Matches above the configured threshold are written to `matching_payment_invoice`.
+
+---
+
+## Deployment
+
+The service is deployed to **Google Cloud Run** as two separate services:
+
+- `paisavasool-paymentmatching-service` — the FastAPI API
+- `paisavasool-rq-worker` — the RQ worker (`src/worker.py`)
+
+Both services read environment variables from Cloud Run secret environment variables or the `.env` file at build time.
+
+```bash
+# Build and push image
+docker build -t gcr.io/<project>/<image>:<tag> .
+docker push gcr.io/<project>/<image>:<tag>
+
+# Deploy API
+gcloud run deploy paisavasool-paymentmatching-service \
+  --image gcr.io/<project>/<image>:<tag> \
+  --region us-east1 \
+  --set-env-vars ENV=production
+
+# Deploy Worker
+gcloud run deploy paisavasool-rq-worker \
+  --image gcr.io/<project>/<worker-image>:<tag> \
+  --region us-east1 \
+  --command "python,src/worker.py"
+```
+
+The worker's `/health` endpoint on port 8080 satisfies Cloud Run's startup and liveness probes.

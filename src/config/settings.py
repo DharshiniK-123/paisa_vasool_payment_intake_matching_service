@@ -1,6 +1,12 @@
-from pydantic_settings import BaseSettings
+from __future__ import annotations
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
+    ENV: str
+    LOG_LEVEL: str
+
     DB_USER: str
     DB_PASSWORD: str
     DB_HOST: str
@@ -27,8 +33,19 @@ class Settings(BaseSettings):
     MAIL_STARTTLS: bool = True
     MAIL_SSL_TLS: bool = False
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    HTTP_TIMEOUT: int
 
-settings = Settings()
+    GCS_BUCKET: str = ""
+
+    model_config = SettingsConfigDict(env_file=".env")
+
+    @property
+    def DATABASE_URL(self) -> str:
+        return (
+            f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            f"?ssl=require"
+        )
+
+
+settings = Settings()  # type: ignore[call-arg]

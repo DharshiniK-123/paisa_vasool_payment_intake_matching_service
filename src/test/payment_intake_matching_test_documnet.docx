@@ -1,0 +1,359 @@
+# PaisaVasool — Payment Intake & Matching Service
+
+## Test Documentation
+
+**Version:** 1.0
+**Base URL:** `/api/v1/payment_intake_matching`
+
+---
+
+# 1. Overview
+
+This service covers:
+
+* Document upload & background processing (RQ)
+* LLM-based extraction (text + vision)
+* Payment ↔ Invoice matching
+* Dashboard & discrepancy reporting
+* Aging & reminder scheduling
+* Scheduler management
+
+⚠️ All endpoints require **Bearer token** unless specified.
+
+---
+
+# 2. Document Endpoints
+
+## 2.1 Upload Document
+
+POST `/documents/upload?document_type=INVOICE|PAYMENT`
+
+* Auth: Required
+* Content-Type: multipart/form-data
+* Max size: 10MB
+
+### Test Cases
+
+```
+Valid INVOICE → 200
+{ "status": "PROCESSING", "job_id": "...", "document_id": ... }
+
+Valid PAYMENT → 200
+File > 10MB → 413
+Missing file → 422
+Invalid type → 422
+No auth → 401/403
+```
+
+---
+
+## 2.2 Job Status
+
+GET `/documents/jobs/{job_id}/status`
+
+```
+PROCESSING → 200
+{ status: "PROCESSING" }
+
+EXTRACTED → 200
+{ status: "EXTRACTED", records_count: N }
+
+FAILED → 200
+{ status: "FAILED", error: "..." }
+```
+
+---
+
+## 2.3 Get Documents
+
+GET `/documents/`
+
+```
+Documents exist → 200 [ ... ]
+No documents → 200 []
+No auth → 401/403
+```
+
+---
+
+## 2.4 Get Document
+
+GET `/documents/{document_id}`
+
+```
+Found → 200
+Not found → 404
+```
+
+---
+
+## 2.5 Get Invoices
+
+GET `/documents/{document_id}/invoices`
+
+```
+Exists → 200 [ ... ]
+None → 200 []
+Not found → 500
+```
+
+---
+
+## 2.6 Get Payments
+
+GET `/documents/{document_id}/payments`
+
+```
+Exists → 200
+None → 404
+```
+
+---
+
+## 2.7 Save Records
+
+POST `/documents/{document_id}/save`
+
+Body:
+
+```
+{
+  "document_type": "INVOICE | PAYMENT",
+  "records": [...]
+}
+```
+
+```
+Valid → 200
+Empty → 400
+Duplicate → 409
+Not found → 404
+```
+
+---
+
+## 2.8 Stats
+
+GET `/documents/stats`
+
+```
+200 → aggregated stats
+```
+
+---
+
+## 2.9 Delete Invoice
+
+DELETE `/documents/invoices/{invoice_id}`
+
+```
+Success → 200
+Not found → 404
+```
+
+---
+
+## 2.10 Delete Payment
+
+DELETE `/documents/payments/{payment_id}`
+
+```
+Success → 200
+Not found → 404
+```
+
+---
+
+# 3. Matching Endpoints
+
+## 3.1 Payment Matching
+
+GET `/matching/payment/{payment_id}`
+
+```
+Found → 200
+Not found → 404
+```
+
+---
+
+## 3.2 Invoice Matching
+
+GET `/matching/invoice/{invoice_id}`
+
+```
+Found → 200
+Not found → 404
+```
+
+---
+
+## 3.3 Invoice Detail
+
+GET `/matching/invoice-detail/{invoice_id}`
+
+```
+Found → 200
+Not found → 404
+```
+
+---
+
+## 3.4 Payment Detail
+
+GET `/matching/payment-detail/{payment_id}`
+
+---
+
+## 3.5 Dashboard Summary
+
+GET `/matching/dashboard/summary`
+
+```
+200 → { totals }
+```
+
+---
+
+## 3.6 Unmatched Payments
+
+GET `/matching/dashboard/unmatched-payments`
+
+---
+
+## 3.7 Unmatched Invoices
+
+GET `/matching/dashboard/unmatched-invoices`
+
+---
+
+## 3.8 Recent Matches
+
+GET `/matching/dashboard/recent?limit=1-100`
+
+```
+Invalid → 400
+Valid → 200
+```
+
+---
+
+## 3.9 Discrepancies
+
+GET `/matching/dashboard/discrepancies`
+
+---
+
+# 4. Aging & Reminders
+
+## 4.1 Run Aging
+
+POST `/aging/run`
+
+```
+Success → 200
+Failure → 500
+```
+
+---
+
+## 4.2 Aging Config CRUD
+
+GET `/aging-config/`
+GET `/aging-config/{id}`
+POST `/aging-config/`
+PUT `/aging-config/{id}`
+DELETE `/aging-config/{id}`
+
+---
+
+## 4.3 Reminder Logs
+
+GET `/aging/reminders`
+
+---
+
+# 5. Scheduler
+
+## 5.1 Get Settings
+
+GET `/scheduler/settings`
+
+---
+
+## 5.2 Update Settings
+
+PUT `/scheduler/settings`
+
+Query:
+
+```
+run_hour
+run_minute
+is_enabled
+```
+
+---
+
+## 5.3 Status
+
+GET `/scheduler/status`
+
+```
+{
+  scheduler_running,
+  job_exists,
+  next_run,
+  job_id
+}
+```
+
+---
+
+# 6. Matching Logic
+
+| Step | Strategy   | Behaviour   | Disqualify |
+| ---- | ---------- | ----------- | ---------- |
+| 1    | Invoice No | Match check | YES        |
+| 2    | Customer   | Similarity  | NO         |
+| 3    | Currency   | Match       | YES        |
+| 4    | Amount     | Score       | NO         |
+| 5    | Balance    | Bonus       | NO         |
+
+---
+
+# 7. Validation Rules
+
+## Upload
+
+* type must be INVOICE/PAYMENT → 422
+* file required → 422
+* size ≤ 10MB → 413
+
+## Save Records
+
+* document must exist → 404
+* records not empty → 400
+* duplicates → 409
+
+## Aging Config
+
+* severity unique → 409
+* required fields → 422
+
+## Recent Matches
+
+* limit 1–100 → 400
+
+---
+
+# 8. Notes
+
+* JWT required for most endpoints
+* RQ worker must run → otherwise jobs stay PROCESSING
+* Redis required → for job status
+* LLM keys required → otherwise extraction fails
+* Scheduler settings stored in DB
+* Soft deletes excluded from queries
+
+---
