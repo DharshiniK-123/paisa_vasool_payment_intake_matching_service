@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.rest.dependencies import get_current_user, get_db
 from src.core.services import document_service as service
 from src.core.services.document import save_document_records, upload_document_and_enqueue
-from src.data.clients.redis_clients import redis_client
+from src.data.clients.redis_clients import get_async_redis_client
 from src.data.repositories import document_repository as repo
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ async def upload_document(
 async def get_job_status(job_id: str, user: dict = Depends(get_current_user)):
     """Status of the rq worker"""
     try:
+        redis_client = get_async_redis_client()
         data = await redis_client.get(f"job:{job_id}") if redis_client else None
         if not data:
             return {
