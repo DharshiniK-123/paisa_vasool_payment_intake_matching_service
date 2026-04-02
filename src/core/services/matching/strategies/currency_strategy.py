@@ -40,7 +40,6 @@ class CurrencyStrategy(BaseMatchStrategy):
                 passed=True,
             )
 
-        # Same currency — simple pass
         return ScoreResult(
             points=MATCHING_CONFIG.w_currency,
             reasons=[],

@@ -1,6 +1,7 @@
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.enums import InvoicePaymentStatus, MatchStatus
 from src.data.models.postgres.customer import Customer
 from src.data.models.postgres.invoice_data import InvoiceData
 from src.data.models.postgres.matching_payment_invoice import MatchingPaymentInvoice
@@ -43,7 +44,11 @@ async def get_all_matches(db: AsyncSession) -> list[MatchingPaymentInvoice]:
 
 async def get_unmatched_payments(db: AsyncSession) -> list:
     matched_ids = select(MatchingPaymentInvoice.payment_detail_id).where(
-        MatchingPaymentInvoice.match_status.in_(["FULL", "PARTIAL", "OVERPAYMENT"])
+        MatchingPaymentInvoice.match_status.in_([
+            MatchStatus.FULL,
+            MatchStatus.PARTIAL,
+            MatchStatus.OVERPAYMENT,
+        ])
     )
     result = await db.execute(
         select(
@@ -72,7 +77,7 @@ async def get_unmatched_invoices(db: AsyncSession) -> list:
             Customer.email.label("customer_email"),
         )
         .join(Customer, InvoiceData.customer_id == Customer.id, isouter=True)
-        .where(InvoiceData.payment_status == "UNPAID", ACTIVE_INVOICE)
+        .where(InvoiceData.payment_status == InvoicePaymentStatus.UNPAID, ACTIVE_INVOICE)
     )
     return list(result.all())
 
@@ -140,8 +145,12 @@ async def get_discrepancies(db: AsyncSession) -> list:
         .join(PaymentDetail, MatchingPaymentInvoice.payment_detail_id == PaymentDetail.id)
         .join(Customer, PaymentDetail.customer_id == Customer.id, isouter=True)
         .where(
-            MatchingPaymentInvoice.match_status.in_
-            (["FAILED", "DUPLICATE", "PARTIAL", "OVERPAYMENT"]),
+            MatchingPaymentInvoice.match_status.in_([
+                MatchStatus.FAILED,
+                MatchStatus.DUPLICATE,
+                MatchStatus.PARTIAL,
+                MatchStatus.OVERPAYMENT,
+            ]),
             ACTIVE_PAYMENT,
         )
         .order_by(MatchingPaymentInvoice.created_at.desc())

@@ -6,6 +6,16 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
+from src.core.enums import (
+    AgingSeverity,
+    DocumentStatus,
+    DocumentType,
+    InvoicePaymentStatus,
+    MatchStatus,
+    ReminderChannel,
+    ReminderStatus,
+)
+
 
 class CustomerCreate(BaseModel):
     name: str = Field(..., max_length=100)
@@ -23,7 +33,7 @@ class CustomerResponse(BaseModel):
 
 
 class DocumentCreate(BaseModel):
-    document_type: Literal["INVOICE", "PAYMENT"]
+    document_type: DocumentType
     file_name: str = Field(..., max_length=255)
     file_type: Literal["pdf", "csv", "xlsx", "png", "jpeg", "jpg", "webp"]
     storage_path: str
@@ -48,7 +58,7 @@ class InvoiceDataCreate(BaseModel):
     due_date: date
     total_amount: Decimal = Field(..., gt=0, decimal_places=2)
     paid_amount: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
-    payment_status: str = Field(default="UNPAID", max_length=20)
+    payment_status: InvoicePaymentStatus = InvoicePaymentStatus.UNPAID
     currency: str = Field(default="INR", max_length=10)
     gl_code: str | None = Field(None, max_length=50)
 
@@ -97,7 +107,7 @@ class MatchingCreate(BaseModel):
     matched_amount: Decimal = Field(..., ge=0, decimal_places=2)
     amount_pending: Decimal | None = Field(None, decimal_places=2)
     match_score: Decimal = Field(..., ge=0, le=100, decimal_places=2)
-    match_status: Literal["FULL", "PARTIAL", "FAILED", "OVERPAYMENT", "DUPLICATE"]
+    match_status: MatchStatus
     match_reason: str | None = None
 
 
@@ -115,7 +125,7 @@ class MatchingResponse(BaseModel):
 
 
 class AgingConfigCreate(BaseModel):
-    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL", "SCHEDULER"]
+    severity: AgingSeverity
     due_days_from: int | None = Field(None, ge=0)
     due_days_to: int | None = Field(None, ge=1)
     reminder_frequency: int | None = Field(None, ge=1)
@@ -129,7 +139,7 @@ class AgingConfigUpdate(BaseModel):
     due_days_from: int | None = Field(None, ge=0)
     due_days_to: int | None = Field(None, ge=1)
     reminder_frequency: int | None = Field(None, ge=1)
-    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL", "SCHEDULER"]
+    severity: AgingSeverity
     is_active: bool
     run_hour: int | None = Field(None, ge=0, le=23)
     run_minute: int | None = Field(None, ge=0, le=59)
@@ -151,11 +161,11 @@ class AgingConfigResponse(BaseModel):
 class ReminderLogCreate(BaseModel):
     customer_id: int
     invoice_id: int
-    severity: Literal["MEDIUM", "HIGH", "CRITICAL"]
+    severity: AgingSeverity
     subject: str = Field(..., max_length=255)
     body: str
-    channel: Literal["EMAIL"] = "EMAIL"
-    status: Literal["SENT", "FAILED"]
+    channel: ReminderChannel = ReminderChannel.EMAIL
+    status: ReminderStatus
 
 
 class ReminderLogResponse(BaseModel):

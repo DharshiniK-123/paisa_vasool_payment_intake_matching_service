@@ -7,7 +7,6 @@ from decimal import Decimal
 class ScoreResult:
     points:  int
     reasons: list[str]
-    # If False this strategy hard-disqualifies the invoice — pipeline stops immediately
     passed:  bool = True
 
 

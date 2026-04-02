@@ -10,11 +10,12 @@ import pandas as pd
 import pymupdf4llm
 from fastapi import HTTPException
 from google.cloud import storage as gcs
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_IMAGE_TYPES = {"jpg", "jpeg", "png", "gif", "webp"}
-BUCKET_NAME = os.getenv("GCS_BUCKET")
+SUPPORTED_IMAGE_TYPES = {"jpg", "jpeg", "png", "webp"}
+BUCKET_NAME = settings.GCS_BUCKET
 
 
 def _download_from_gcs(storage_path: str, suffix: str | None = None) -> str:
@@ -34,19 +35,31 @@ def _download_from_gcs(storage_path: str, suffix: str | None = None) -> str:
         raise HTTPException(status_code=422, detail=f"Failed to download file from GCS: {e}") from e
 
 
-def _extract_from_pdf_sync(storage_path: str) -> str:
+
+
+def _extract_pages_from_pdf_sync(storage_path: str) -> list[str]:
+    """Extract text per page from a PDF. Returns a list of non-empty page texts."""
     try:
-        text = pymupdf4llm.to_markdown(storage_path)
-        if not text or not text.strip():
+        import pymupdf 
+
+        doc = pymupdf.open(storage_path)
+        pages = []
+        for page in doc:
+            md = pymupdf4llm.to_markdown(storage_path, pages=[page.number])
+            if md and md.strip():
+                pages.append(md.strip())
+        doc.close()
+
+        if not pages:
             raise HTTPException(
                 status_code=422,
                 detail="PDF appears to be empty or scanned. Only text-based PDFs are supported",
             )
-        return str(text)
+        return pages
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("pdf_extraction_failed", extra={"path": storage_path})
+        logger.exception("pdf_pages_extraction_failed", extra={"path": storage_path})
         raise HTTPException(status_code=422, detail="PDF extraction failed") from e
 
 
@@ -99,7 +112,7 @@ def _extract_from_excel_sync(storage_path: str) -> pd.DataFrame:
         raise HTTPException(status_code=422, detail="Excel extraction failed") from e
 
 
-async def extract_text(storage_path: str, file_type: str, file_url: str | None = None):
+async def parse_text(storage_path: str, file_type: str, file_url: str | None = None):
     """
     Download the file from GCS then extract its content.
     CPU/IO-bound sync extractors are offloaded via asyncio.to_thread()
@@ -110,7 +123,7 @@ async def extract_text(storage_path: str, file_type: str, file_url: str | None =
     local_path = await asyncio.to_thread(_download_from_gcs, storage_path, suffix)
 
     if file_type == "pdf":
-        return await asyncio.to_thread(_extract_from_pdf_sync, local_path)
+        return await asyncio.to_thread(_extract_pages_from_pdf_sync, local_path)
     elif file_type == "csv":
         return await asyncio.to_thread(_extract_from_csv_sync, local_path)
     elif file_type in ("xlsx", "xls"):

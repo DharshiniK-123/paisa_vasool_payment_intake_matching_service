@@ -2,8 +2,10 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 
-PREVIEW_TTL = 600
-JOB_TTL = 3600
+from src.config.settings import settings
+
+PREVIEW_TTL = settings.PREVIEW_TTL
+JOB_TTL = settings.JOB_TTL
 
 
 class _SafeEncoder(json.JSONEncoder):
@@ -32,7 +34,6 @@ async def safe_redis_setex(key: str, ttl: int, value: str, redis_client=None):
 
         await redis_client.setex(key, ttl, value)
     except Exception as e:
-        print(f"Redis error for key {key}: {str(e)}")
         raise
 
 
@@ -45,7 +46,6 @@ async def process_document_task(
     job_id: str,
     redis_client=None,
 ) -> None:
-    from src.core.services.document import extract_document_data
 
     await safe_redis_setex(
         f"job:{job_id}",

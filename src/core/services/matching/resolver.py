@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from src.config.matching_config import MATCHING_CONFIG
+from src.core.enums import MatchStatus
 
 
 def resolve_match(
@@ -21,12 +22,12 @@ def resolve_match(
     diff = abs(remaining_pay - inv_remaining)
 
     if remaining_pay > inv_remaining + MATCHING_CONFIG.rounding_tolerance:
-        return "OVERPAYMENT", inv_remaining, Decimal("0.00")
+        return MatchStatus.OVERPAYMENT, inv_remaining, Decimal("0.00")
 
     if diff <= MATCHING_CONFIG.rounding_tolerance or remaining_pay >= inv_remaining:
-        return "FULL", inv_remaining, Decimal("0.00")
+        return MatchStatus.FULL, inv_remaining, Decimal("0.00")
 
-    return "PARTIAL", remaining_pay, inv_remaining - remaining_pay
+    return MatchStatus.PARTIAL, remaining_pay, inv_remaining - remaining_pay
 
 
 def build_status_sentence(
@@ -42,7 +43,7 @@ def build_status_sentence(
 ) -> str:
     """Builds the human-readable outcome sentence appended to match_reason."""
 
-    if match_status == "FULL":
+    if match_status == MatchStatus.FULL:
         if converted and fx_rate:
             return (
                 f"Invoice '{invoice.invoice_number}' fully matched after currency conversion. "
@@ -57,14 +58,13 @@ def build_status_sentence(
             f"Amount applied: {payment.currency} {matched_amount:,.2f}."
         )
 
-    if match_status == "PARTIAL":
+    if match_status == MatchStatus.PARTIAL:
         return (
             f"Invoice '{invoice.invoice_number}' has been partially matched. "
             f"Amount applied: {invoice.currency} {matched_amount:,.2f}. "
             f"Outstanding balance remaining: {invoice.currency} {amount_pending:,.2f}."
         )
 
-    # OVERPAYMENT
     if converted:
         excess = remaining_pay - inv_remaining
         return (

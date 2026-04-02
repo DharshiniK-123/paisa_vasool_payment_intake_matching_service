@@ -7,10 +7,11 @@ import uvicorn
 from fastapi import FastAPI
 from rq import Queue
 from rq.worker import SimpleWorker
+from src.config.settings import settings
 
-REDIS_HOST = os.getenv("REDIS_HOST", "10.125.46.155")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-PORT = int(os.getenv("PORT", 8080))
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+PORT = settings.PORT
 
 app = FastAPI()
 
@@ -25,7 +26,7 @@ def start_fastapi_forever():
         try:
             uvicorn.run(
                 app,
-                host="0.0.0.0",  # noqa: S104
+                host="0.0.0.0",  
                 port=PORT,
                 log_level="warning",
             )

@@ -6,21 +6,21 @@ from collections import defaultdict
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.enums import DocumentType
 from src.data.repositories import document_repository as repo
 
 logger = logging.getLogger(__name__)
 
 INVOICE_REQUIRED_FIELDS = [
-    "customer_id", 
-    "invoice_number", 
-    "invoice_date", 
-    "due_date", 
+    "customer_id",
+    "invoice_number",
+    "invoice_date",
+    "due_date",
     "total_amount"]
 
 PAYMENT_REQUIRED_FIELDS = [
-    "customer_id", 
-    "invoice_no", 
-    "payment_amount", 
+    "customer_id",
+    "payment_amount",
     "paid_date"]
 
 
@@ -34,7 +34,7 @@ def _is_empty(value) -> bool:
 
 def validate_records(records: list, document_type: str) -> None:
     """Validate that all required fields are present in each record."""
-    required = INVOICE_REQUIRED_FIELDS if document_type == "INVOICE" else PAYMENT_REQUIRED_FIELDS
+    required = INVOICE_REQUIRED_FIELDS if document_type == DocumentType.INVOICE else PAYMENT_REQUIRED_FIELDS
     errors = []
     for idx, record in enumerate(records, start=1):
         missing = [f for f in required if _is_empty(record.get(f))]
@@ -84,7 +84,7 @@ async def resolve_customer_ids(
             customer = await repo.get_customer_by_name(customer_name, db)
 
         if not customer:
-            if document_type == "PAYMENT":
+            if document_type == DocumentType.PAYMENT:
                 identifier = customer_email or customer_name
                 raise HTTPException(
                     status_code=422,
@@ -122,8 +122,8 @@ async def check_duplicates(
     records: list[dict], document_type: str, document_id: int, db: AsyncSession
 ) -> None:
     """Raise HTTPException if any duplicate invoice number or payment reference is found."""
-    for _idx, record in enumerate(records, start=1):  # fix: unpack tuple
-        if document_type == "PAYMENT":
+    for _idx, record in enumerate(records, start=1):
+        if document_type == DocumentType.PAYMENT:
             invoice_no = record.get("invoice_no")
             payment_reference = record.get("payment_reference")
             if invoice_no and payment_reference:
@@ -139,7 +139,7 @@ async def check_duplicates(
                         ),
                     )
 
-        if document_type == "INVOICE":
+        if document_type == DocumentType.INVOICE:
             invoice_number = record.get("invoice_number")
             if invoice_number:
                 existing = await repo.find_duplicate_invoice_number(

@@ -45,7 +45,6 @@ class InvoiceNumberStrategy(BaseMatchStrategy):
                 passed=True,
             )
 
-        # No number match at all — hard disqualify, skip remaining strategies
         return ScoreResult(
             points=0,
             reasons=[

@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from src.core.services.aging_service import get_overdue_invoices_with_bucket
+from src.core.services.aged_service import get_overdue_invoices_with_bucket
 from src.core.services.reminder_service import process_reminder
 from src.data.clients.postgres_client import AsyncSessionLocal
 

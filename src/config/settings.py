@@ -18,6 +18,15 @@ class Settings(BaseSettings):
 
     REDIS_HOST: str
     REDIS_PORT: int
+    PORT: int
+
+
+    FRANKFURTER_BASE: str
+    HTTP_TIMEOUT: float
+    MAX_RETRIES: int
+
+    PREVIEW_TTL:int
+    JOB_TTL:int
 
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
@@ -33,11 +42,11 @@ class Settings(BaseSettings):
     MAIL_STARTTLS: bool = True
     MAIL_SSL_TLS: bool = False
 
-    HTTP_TIMEOUT: int
 
-    GCS_BUCKET: str = ""
+    GCS_BUCKET: str
+    GCS_FOLDER: str
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env",extra="ignore")
 
     @property
     def DATABASE_URL(self) -> str:

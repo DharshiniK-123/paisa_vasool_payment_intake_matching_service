@@ -9,14 +9,19 @@ from .strategies import (
     InvoiceNumberStrategy,
 )
 
-# Default pipeline — order matters:
-# InvoiceNumber first so a hard-miss exits immediately without running others.
 DEFAULT_PIPELINE: list[BaseMatchStrategy] = [
-    InvoiceNumberStrategy(),
-    CustomerStrategy(),
-    CurrencyStrategy(),
-    AmountStrategy(),
-    ClosesBalanceStrategy(),
+    InvoiceNumberStrategy(),   # 50 exact / 30 partial  — passed=False if no hit
+    CustomerStrategy(),        # 25
+    CurrencyStrategy(),        # 5
+    AmountStrategy(),          # 20 / 15 / 5
+    ClosesBalanceStrategy(),   # 10 bonus
+]
+
+DEEP_MATCH_PIPELINE: list[BaseMatchStrategy] = [
+    CustomerStrategy(),        # 25
+    CurrencyStrategy(),        # 5
+    AmountStrategy(),          # 20 / 15 / 5
+    ClosesBalanceStrategy(),   # 10 bonus
 ]
 
 
@@ -57,7 +62,6 @@ def run_scoring_pipeline(
         all_reasons  += result.reasons
 
         if not result.passed:
-            # Hard disqualify — return 0 regardless of any prior points
             return 0, all_reasons
 
     return min(total_score, 100), all_reasons
