@@ -7,3 +7,4 @@ app.log
 *.zip
 *.zip.*
 deploy.sh
+__pycache__/

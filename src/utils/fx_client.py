@@ -9,12 +9,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.data.models.postgres.exchange_rate import ExchangeRate
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-FRANKFURTER_BASE = "https://api.frankfurter.app"
-_HTTP_TIMEOUT = 10.0
-MAX_RETRIES = 3
+FRANKFURTER_BASE = settings.FRANKFURTER_BASE
+_HTTP_TIMEOUT = settings.HTTP_TIMEOUT
+MAX_RETRIES = settings.MAX_RETRIES
 
 
 def _is_transient_http_error(exc: Exception) -> bool:
@@ -23,7 +24,6 @@ def _is_transient_http_error(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code == 429 or exc.response.status_code >= 500
     return False
-
 
 async def get_exchange_rate(
     rate_date: date,
@@ -58,26 +58,73 @@ async def get_exchange_rate(
                 resp = await client.get(url, params=params)
                 resp.raise_for_status()
                 data = resp.json()
-                break  # Success
-        except Exception as exc:
+                break
+        except httpx.TimeoutException as exc:
             last_exc = exc
-            if attempt < MAX_RETRIES and _is_transient_http_error(exc):
-                wait = 2**attempt
-                logger.warning(
-                    "frankfurter_retry",
-                    extra={
-                        "attempt": attempt,
-                        "wait_secs": wait,
-                        "error": str(exc),
-                    },
-                )
-                await asyncio.sleep(wait)
+            logger.error(
+                "frankfurter_timeout",
+                extra={"attempt": attempt, "from": from_cur, "to": to_cur, "date": str(rate_date)},
+            )
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(2**attempt)
             else:
                 raise RuntimeError(
-                    f"Frankfurter request failed for {from_cur}→{to_cur} on {rate_date}: {exc}"
+                    f"Frankfurter request timed out after {MAX_RETRIES} retries "
+                    f"for {from_cur}→{to_cur} on {rate_date}. "
+                    "The FX service may be slow or unreachable from this environment."
                 ) from exc
-    else:
-        raise last_exc
+
+        except httpx.NetworkError as exc:
+            last_exc = exc
+            logger.error(
+                "frankfurter_network_error",
+                extra={"attempt": attempt, "error": str(exc)},
+            )
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(2**attempt)
+            else:
+                raise RuntimeError(
+                    f"Network error reaching Frankfurter for {from_cur}→{to_cur} on {rate_date}. "
+                    "Check outbound internet access from the worker/container. "
+                    f"Detail: {exc}"
+                ) from exc
+
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            logger.error(
+                "frankfurter_http_error",
+                extra={"status": status, "from": from_cur, "to": to_cur},
+            )
+            if status == 429:
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(2**attempt)
+                    continue
+                raise RuntimeError(
+                    f"Frankfurter rate limit exceeded for {from_cur}→{to_cur}. "
+                    "Too many requests from this environment. Consider a paid FX provider."
+                ) from exc
+            elif status == 404:
+                raise RuntimeError(
+                    f"No exchange rate found for {from_cur}→{to_cur} on {rate_date}. "
+                    "Frankfurter may not support this currency pair or date."
+                ) from exc
+            elif status >= 500:
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(2**attempt)
+                    continue
+                raise RuntimeError(
+                    f"Frankfurter server error ({status}) for {from_cur}→{to_cur}. "
+                    "The FX service is currently unavailable."
+                ) from exc
+            else:
+                raise RuntimeError(
+                    f"Unexpected HTTP {status} from Frankfurter for {from_cur}→{to_cur}."
+                ) from exc
+
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unexpected error fetching FX rate for {from_cur}→{to_cur} on {rate_date}: {exc}"
+            ) from exc
 
     rates: dict = data.get("rates", {})
     if to_cur not in rates:

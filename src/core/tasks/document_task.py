@@ -2,8 +2,10 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 
-PREVIEW_TTL = 600
-JOB_TTL = 3600
+from src.config.settings import settings
+
+PREVIEW_TTL = settings.PREVIEW_TTL
+JOB_TTL = settings.JOB_TTL
 
 
 class _SafeEncoder(json.JSONEncoder):
@@ -20,19 +22,12 @@ def _dumps(obj) -> str:
 
 
 async def safe_redis_setex(key: str, ttl: int, value: str, redis_client=None):
-    """
-    Write a key to Redis. Accepts an explicit redis_client so that callers
-    running inside a worker-created event loop can pass a freshly created
-    client that is bound to the correct loop.
-    """
     try:
         if redis_client is None:
             from src.data.clients.redis_clients import get_async_redis_client
             redis_client = get_async_redis_client()
-
         await redis_client.setex(key, ttl, value)
     except Exception as e:
-        print(f"Redis error for key {key}: {str(e)}")
         raise
 
 
@@ -41,10 +36,15 @@ async def process_document_task(
     storage_path: str,
     file_type: str,
     file_url: str,
-    document_type: str,
     job_id: str,
     redis_client=None,
 ) -> None:
+    """
+    Worker task — no document_type param.
+    Classification happens inside extract_document_data via keyword search.
+    The detected type is written back to the Document row and included in
+    the Redis preview so the frontend knows what it received.
+    """
     from src.core.services.document import extract_document_data
 
     await safe_redis_setex(
@@ -55,12 +55,11 @@ async def process_document_task(
     )
 
     try:
-        extracted_records = await extract_document_data(
+        detected_type, extracted_records = await extract_document_data(
             document_id=document_id,
             storage_path=storage_path,
             file_type=file_type,
             file_url=file_url,
-            document_type=document_type,
         )
 
         await safe_redis_setex(
@@ -77,6 +76,7 @@ async def process_document_task(
                 {
                     "status": "EXTRACTED",
                     "document_id": document_id,
+                    "document_type": detected_type,  
                     "records_count": len(extracted_records),
                     "preview_data": extracted_records,
                 }
@@ -106,7 +106,6 @@ def process_document_task_sync(
     storage_path: str,
     file_type: str,
     file_url: str,
-    document_type: str,
     job_id: str,
 ) -> None:
     import asyncio
@@ -125,7 +124,6 @@ def process_document_task_sync(
                 storage_path=storage_path,
                 file_type=file_type,
                 file_url=file_url,
-                document_type=document_type,
                 job_id=job_id,
                 redis_client=redis_client,
             )

@@ -2,10 +2,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
-from src.core.services.aging_service import get_overdue_invoices_with_bucket
+from src.core.services.aged_service import get_overdue_invoices_with_bucket
 from src.core.services.reminder_service import process_reminder
 from src.data.clients.postgres_client import AsyncSessionLocal
 from src.data.models.postgres.scheduler_settings import SchedulerSettings
+
+
+
+hour, minute = 9, 0
 
 scheduler = AsyncIOScheduler()
 JOB_ID = "aging_reminder_job"
@@ -56,7 +60,7 @@ async def reschedule_aging_job(hour: int, minute: int):
 
 
 async def start_scheduler_from_db():
-    hour, minute = 9, 0
+    
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(SchedulerSettings).where(SchedulerSettings.id == 1))

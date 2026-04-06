@@ -3,6 +3,7 @@ from datetime import date
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.enums import AgingSeverity, InvoicePaymentStatus
 from src.data.models.postgres.aging_config import AgingConfig
 from src.data.models.postgres.customer import Customer
 from src.data.models.postgres.invoice_data import InvoiceData
@@ -13,7 +14,7 @@ from src.data.models.postgres.scheduler_settings import SchedulerSettings
 async def get_all_aging_configs(db: AsyncSession) -> list[AgingConfig]:
     result = await db.execute(
         select(AgingConfig)
-        .where(AgingConfig.severity != "SCHEDULER")
+        .where(AgingConfig.severity != AgingSeverity.SCHEDULER)
         .order_by(AgingConfig.id.asc())
     )
     return list(result.scalars().all())
@@ -78,7 +79,7 @@ async def get_active_aging_configs(db: AsyncSession) -> list[AgingConfig]:
     result = await db.execute(
         select(AgingConfig)
         .where(AgingConfig.is_active)
-        .where(AgingConfig.severity != "SCHEDULER")
+        .where(AgingConfig.severity != AgingSeverity.SCHEDULER)
         .order_by(AgingConfig.due_days_from)
     )
     return list(result.scalars().all())
@@ -89,7 +90,10 @@ async def get_overdue_invoices(db: AsyncSession) -> list[InvoiceData]:
     result = await db.execute(
         select(InvoiceData).where(
             and_(
-                InvoiceData.payment_status.in_(["UNPAID", "PARTIALLY_PAID"]),
+                InvoiceData.payment_status.in_([
+                    InvoicePaymentStatus.UNPAID,
+                    InvoicePaymentStatus.PARTIALLY_PAID,
+                ]),
                 InvoiceData.due_date < today,
             )
         )

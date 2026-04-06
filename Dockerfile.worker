@@ -1,6 +1,5 @@
 FROM python:3.13-slim
 
-# Create non-root user for security
 RUN useradd --create-home workeruser
 WORKDIR /app
 RUN chown workeruser:workeruser /app

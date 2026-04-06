@@ -14,18 +14,18 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CandidateSet:
     """Categorized invoice buckets for one payment."""
-    same_currency:    list[InvoiceData] = field(default_factory=list)
-    fx_mismatch:      list[InvoiceData] = field(default_factory=list)
-    already_paid:     list[InvoiceData] = field(default_factory=list)
-    deleted:          list[InvoiceData] = field(default_factory=list)
+    same_currency:   list[InvoiceData] = field(default_factory=list)
+    fx_mismatch:     list[InvoiceData] = field(default_factory=list)
+    already_paid:    list[InvoiceData] = field(default_factory=list)
+    deleted:         list[InvoiceData] = field(default_factory=list)
+    deep_candidates: list[InvoiceData] = field(default_factory=list) 
 
     def has_open(self) -> bool:
-        return bool(self.same_currency or self.fx_mismatch)
+        return bool(self.same_currency or self.fx_mismatch or self.deep_candidates)
 
     def best_failure_reason(self, payment, invoice_nos: list[str]) -> str:
         """
         Returns the most specific failure reason when no open candidates exist.
-        Centralises all the 'already paid / deleted / not found' messaging.
         """
         for inv in self.already_paid:
             inv_num = _normalize(str(inv.invoice_number or ""))
@@ -45,9 +45,15 @@ class CandidateSet:
                     "restore the invoice or redirect this payment."
                 )
 
+        if not invoice_nos:
+            return (
+                "No invoice number was provided with this payment and no open invoices "
+                "could be matched by amount or customer. Manual assignment is required."
+            )
+
         return (
-            f"No open invoices were found for customer ID {payment.customer_id}. "
-            "Either all invoices are already fully paid, or the customer ID does not "
+            "No open invoices were found for customer. "
+            "Either all invoices are already fully paid, or the customer detail does not "
             "match any invoice on record."
         )
 
@@ -55,7 +61,10 @@ class CandidateSet:
 class CandidateFetcher:
     """
     Fetches and categorizes invoices for a given payment in a single pass.
-    Replaces the three separate DB queries + scattered filter loops in the original.
+
+    Two paths:
+      - invoice_no present  → filter open invoices by number, split by currency (existing)
+      - invoice_no absent   → populate deep_candidates with all open same-currency invoices
     """
 
     def __init__(self, db: AsyncSession):
@@ -77,7 +86,7 @@ class CandidateFetcher:
                 )
             )
         )
-        open_invoices: list[InvoiceData] = list(open_result.scalars().all())  # fix 1
+        open_invoices: list[InvoiceData] = list(open_result.scalars().all())
 
         # Fetch already fully-paid (for better error messages)
         paid_result = await self.db.execute(
@@ -89,7 +98,7 @@ class CandidateFetcher:
                 )
             )
         )
-        already_paid: list[InvoiceData] = list(paid_result.scalars().all())  # fix 2
+        already_paid: list[InvoiceData] = list(paid_result.scalars().all())
 
         # Fetch soft-deleted (for better error messages)
         deleted_result = await self.db.execute(
@@ -100,33 +109,41 @@ class CandidateFetcher:
                 )
             )
         )
-        deleted: list[InvoiceData] = list(deleted_result.scalars().all())  # fix 3
+        deleted: list[InvoiceData] = list(deleted_result.scalars().all())
 
-        # Filter open invoices by invoice number, then split by currency
-        same_currency: list[InvoiceData] = []
-        fx_mismatch:   list[InvoiceData] = []
+        same_currency:   list[InvoiceData] = []
+        fx_mismatch:     list[InvoiceData] = []
+        deep_candidates: list[InvoiceData] = []
 
-        for inv in open_invoices:
-            inv_num    = _normalize(str(inv.invoice_number or ""))
-            number_hit = any(
-                n == inv_num or inv_num in n or n in inv_num
-                for n in invoice_nos
-            )
-            if not number_hit:
-                continue
-            if payment.currency == inv.currency:
-                same_currency.append(inv)
-            else:
-                fx_mismatch.append(inv)
+        if invoice_nos:
+            for inv in open_invoices:
+                inv_num    = _normalize(str(inv.invoice_number or ""))
+                number_hit = any(
+                    n == inv_num or inv_num in n or n in inv_num
+                    for n in invoice_nos
+                )
+                if not number_hit:
+                    continue
+                if payment.currency == inv.currency:
+                    same_currency.append(inv)
+                else:
+                    fx_mismatch.append(inv)
+        else:
+            for inv in open_invoices:
+                if payment.currency == inv.currency:
+                    deep_candidates.append(inv)
+                else:
+                    fx_mismatch.append(inv)  
 
         logger.debug(
             "candidate_fetch",
             extra={
-                "payment_id":    payment.id,
-                "same_currency": len(same_currency),
-                "fx_mismatch":   len(fx_mismatch),
-                "already_paid":  len(already_paid),
-                "deleted":       len(deleted),
+                "payment_id":      payment.id,
+                "same_currency":   len(same_currency),
+                "fx_mismatch":     len(fx_mismatch),
+                "deep_candidates": len(deep_candidates),
+                "already_paid":    len(already_paid),
+                "deleted":         len(deleted),
             },
         )
 
@@ -135,4 +152,5 @@ class CandidateFetcher:
             fx_mismatch=fx_mismatch,
             already_paid=already_paid,
             deleted=deleted,
+            deep_candidates=deep_candidates,
         )

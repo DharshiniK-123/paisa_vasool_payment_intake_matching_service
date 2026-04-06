@@ -12,5 +12,6 @@ class Document(base):
     file_name = Column(String(255), nullable=False)
     file_type = Column(String(20), nullable=False)  # pdf / csv / xlsx
     storage_path = Column(String, nullable=False)
+    file_hash = Column(String, nullable=True, index=True)
     status = Column(String(50), nullable=False)  # UPLOADED / PARSED / FAILED
     uploaded_at = Column(DateTime(timezone=True), default=func.now())

@@ -61,7 +61,6 @@ async def _generate_email(
         "MEDIUM": "Polite and friendly. Assume it was an oversight. No pressure.",
         "HIGH": "Firm and professional. Request immediate action. "
         "Mention consequences politely.",
-        "CRITICAL": "Urgent and formal. Mention escalation to senior management if not resolved.",
     }
 
     prompt = f"""
@@ -113,7 +112,6 @@ async def _generate_email(
             "body": parsed.get("body") or _fallback_email()["body"],
         }
     except Exception as llm_exc:
-        print(f"[LLM FAILED] {llm_exc}")
         return _fallback_email()
 
 
@@ -142,7 +140,6 @@ async def process_reminder(
     failure_reason = None
 
     try:
-        print("before sending email")
         await send_email(
             to=str(customer.email),
             subject=email["subject"],
@@ -152,7 +149,6 @@ async def process_reminder(
     except Exception as exc:
         status = "FAILED"
         failure_reason = str(exc)
-        print(failure_reason)
 
     reminder = ReminderLog(
         customer_id=customer.id,

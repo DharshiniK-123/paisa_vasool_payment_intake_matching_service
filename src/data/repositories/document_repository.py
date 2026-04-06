@@ -3,6 +3,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sqlfunc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.enums import DocumentType, InvoicePaymentStatus, MatchStatus
 from src.data.models.postgres.customer import Customer
 from src.data.models.postgres.document import Document
 from src.data.models.postgres.invoice_data import InvoiceData
@@ -17,7 +18,7 @@ async def get_document_by_id(document_id: int, db: AsyncSession) -> Document | N
 
 async def get_all_documents(db: AsyncSession) -> list[Document]:
     result = await db.execute(select(Document))
-    return list(result.scalars().all())  # fix 1
+    return list(result.scalars().all())
 
 async def get_customer_by_email(email: str, db: AsyncSession) -> Customer | None:
     result = await db.execute(
@@ -101,7 +102,7 @@ async def get_invoices_with_matches(document_id: int, db: AsyncSession) -> list:
         .where(InvoiceData.document_id == document_id)
         .order_by(InvoiceData.id, MatchingPaymentInvoice.created_at.desc())
     )
-    return list(result.all())  
+    return list(result.all())
 
 
 async def get_payments_by_document(document_id: int, db: AsyncSession) -> list:
@@ -122,11 +123,10 @@ async def get_payments_by_document(document_id: int, db: AsyncSession) -> list:
         .join(Customer, PaymentDetail.customer_id == Customer.id, isouter=True)
         .where(
             PaymentDetail.document_id == document_id,
-            PaymentDetail.is_deleted.is_(False), 
+            PaymentDetail.is_deleted.is_(False),
         )
     )
-    return list(result.mappings().all())  
-
+    return list(result.mappings().all())
 
 
 async def get_invoice_by_id(invoice_id: int, db: AsyncSession) -> InvoiceData | None:
@@ -144,9 +144,13 @@ async def soft_delete_invoice(invoice_id: int, db: AsyncSession) -> None:
     matching_result = await db.execute(
         select(MatchingPaymentInvoice).where(
             MatchingPaymentInvoice.invoice_id == invoice_id,
-            MatchingPaymentInvoice.match_status.in_(
-                ["FULL", "PARTIAL", "OVERPAYMENT", "FAILED", "DUPLICATE"]
-            ),
+            MatchingPaymentInvoice.match_status.in_([
+                MatchStatus.FULL,
+                MatchStatus.PARTIAL,
+                MatchStatus.OVERPAYMENT,
+                MatchStatus.FAILED,
+                MatchStatus.DUPLICATE,
+            ]),
         )
     )
     matching_records = matching_result.scalars().all()
@@ -162,12 +166,11 @@ async def soft_delete_invoice(invoice_id: int, db: AsyncSession) -> None:
         await db.execute(
             sa_delete(MatchingPaymentInvoice).where(
                 MatchingPaymentInvoice.payment_detail_id.in_(affected_payment_ids),
-                MatchingPaymentInvoice.match_status == "FAILED",
+                MatchingPaymentInvoice.match_status == MatchStatus.FAILED,
                 MatchingPaymentInvoice.invoice_id.is_(None),
             )
         )
 
-    await db.commit()
 
 
 async def get_payment_by_id(payment_id: int, db: AsyncSession) -> PaymentDetail | None:
@@ -181,9 +184,7 @@ async def soft_delete_payment(payment_id: int, db: AsyncSession) -> None:
     if not payment:
         return
     payment.is_deleted = True  # type: ignore[assignment]
-    await db.commit()
-
-
+    
 async def get_user_stats(db: AsyncSession) -> list[dict]:
     invoice_q = await db.execute(
         select(
@@ -192,7 +193,7 @@ async def get_user_stats(db: AsyncSession) -> list[dict]:
         )
         .join(InvoiceData, InvoiceData.document_id == Document.id)
         .where(
-            Document.document_type == "INVOICE",
+            Document.document_type == DocumentType.INVOICE,
             Document.user_id.isnot(None),
             InvoiceData.is_deleted.is_(False),
         )
@@ -207,7 +208,7 @@ async def get_user_stats(db: AsyncSession) -> list[dict]:
         )
         .join(PaymentDetail, PaymentDetail.document_id == Document.id)
         .where(
-            Document.document_type == "PAYMENT",
+            Document.document_type == DocumentType.PAYMENT,
             Document.user_id.isnot(None),
             PaymentDetail.is_deleted.is_(False),
         )
@@ -223,10 +224,10 @@ async def get_user_stats(db: AsyncSession) -> list[dict]:
         .join(PaymentDetail, PaymentDetail.document_id == Document.id)
         .join(MatchingPaymentInvoice, MatchingPaymentInvoice.payment_detail_id == PaymentDetail.id)
         .where(
-            Document.document_type == "PAYMENT",
+            Document.document_type == DocumentType.PAYMENT,
             Document.user_id.isnot(None),
             PaymentDetail.is_deleted.is_(False),
-            MatchingPaymentInvoice.match_status.notin_(["FAILED"]),
+            MatchingPaymentInvoice.match_status.notin_([MatchStatus.FAILED]),
         )
         .group_by(Document.user_id)
     )

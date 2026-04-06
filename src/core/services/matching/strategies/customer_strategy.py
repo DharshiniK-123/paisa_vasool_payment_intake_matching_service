@@ -31,7 +31,8 @@ class CustomerStrategy(BaseMatchStrategy):
             points=0,
             reasons=[
                 f"Customer ID mismatch — payment customer: {payment.customer_id}, "
-                f"invoice customer: {invoice.customer_id}."
+                f"invoice customer: {invoice.customer_id}. "
+                "Cross-customer matching is not allowed."
             ],
-            passed=True,  # mismatch is noted but does not disqualify
+            passed=False,
         )
