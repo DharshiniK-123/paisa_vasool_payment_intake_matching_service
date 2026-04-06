@@ -3,6 +3,7 @@ from enum import Enum
 class DocumentType(str, Enum):
     INVOICE = "INVOICE"
     PAYMENT = "PAYMENT"
+    UNKNOWN = "UNKNOWN" 
 
 class DocumentStatus(str, Enum):
     PENDING = "PENDING"

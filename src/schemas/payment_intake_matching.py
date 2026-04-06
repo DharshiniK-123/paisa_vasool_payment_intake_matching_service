@@ -182,3 +182,8 @@ class ReminderLogResponse(BaseModel):
     customer_email: str | None = None
     invoice_number: str | None = None
     model_config = {"from_attributes": True}
+
+
+class SaveRecordsRequest(BaseModel):
+    document_type: DocumentType | None = None
+    records: list[dict]

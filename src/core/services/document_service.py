@@ -11,17 +11,19 @@ from src.data.repositories import document_repository as repo
 
 logger = logging.getLogger(__name__)
 
+# customer_id is intentionally excluded here — it is resolved separately by
+# resolve_customer_ids() which raises its own descriptive errors.
 INVOICE_REQUIRED_FIELDS = [
-    "customer_id",
     "invoice_number",
     "invoice_date",
     "due_date",
-    "total_amount"]
+    "total_amount",
+]
 
 PAYMENT_REQUIRED_FIELDS = [
-    "customer_id",
     "payment_amount",
-    "paid_date"]
+    "paid_date",
+]
 
 
 def _is_empty(value) -> bool:
@@ -33,8 +35,12 @@ def _is_empty(value) -> bool:
 
 
 def validate_records(records: list, document_type: str) -> None:
-    """Validate that all required fields are present in each record."""
-    required = INVOICE_REQUIRED_FIELDS if document_type == DocumentType.INVOICE else PAYMENT_REQUIRED_FIELDS
+    """Validate that all required fields are present and non-null in each record."""
+    required = (
+        INVOICE_REQUIRED_FIELDS
+        if document_type == DocumentType.INVOICE
+        else PAYMENT_REQUIRED_FIELDS
+    )
     errors = []
     for idx, record in enumerate(records, start=1):
         missing = [f for f in required if _is_empty(record.get(f))]

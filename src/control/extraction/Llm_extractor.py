@@ -19,6 +19,10 @@ MAX_TEXT_CHARS = 40_000
 LLM_TIMEOUT_SECS = 120
 MAX_RETRIES = 3
 
+# ---------------------------------------------------------------------------
+# Keyword sets for natural-language documents (PDFs, images)
+# ---------------------------------------------------------------------------
+
 INVOICE_KEYWORDS = {
     "tax invoice",
     "bill to",
@@ -52,19 +56,76 @@ PAYMENT_KEYWORDS = {
     "transaction id",
 }
 
+# ---------------------------------------------------------------------------
+# Keyword sets for tabular documents (CSV / Excel column headers & cell values)
+# These match the "col: val" text produced by _row_to_text in document.py
+# ---------------------------------------------------------------------------
 
-def _keyword_classify(text: str, document_type: str) -> str:
+INVOICE_KEYWORDS_TABULAR = {
+    "invoice no",
+    "invoice number",
+    "invoice #",
+    "inv no",
+    "inv #",
+    "inv date",
+    "item description",
+    "qty",
+    "quantity",
+    "line total",
+    "net amount",
+    "tax rate",
+    "vat",
+    "hsn",
+    "gstin",
+    "unit price",        # shared with INVOICE_KEYWORDS — fine to repeat
+    "amount",
+    "customer name",
+    "billing address",
+}
+
+PAYMENT_KEYWORDS_TABULAR = {
+    "payment no",
+    "payment #",
+    "txn id",
+    "transaction id",   # shared with PAYMENT_KEYWORDS — fine to repeat
+    "utr no",
+    "utr",              # shared with PAYMENT_KEYWORDS — fine to repeat
+    "paid amount",
+    "amount paid",      # shared with PAYMENT_KEYWORDS — fine to repeat
+    "payment date",     # shared with PAYMENT_KEYWORDS — fine to repeat
+    "bank ref",
+    "reference no",
+    "remittance",
+    "neft",
+    "rtgs",
+    "imps",
+    "mode of payment",
+    "payer name",
+}
+
+
+def classify_document_type(text: str) -> str:
+    """
+    Classify raw text as INVOICE, PAYMENT, or UNKNOWN by keyword scoring.
+    Checks both natural-language keyword sets (for PDFs/images) and
+    tabular keyword sets (for CSV/Excel rows converted to text).
+
+    Returns one of: "INVOICE", "PAYMENT", "UNKNOWN"
+    """
     text_lower = text.lower()
 
     invoice_hits = sum(1 for k in INVOICE_KEYWORDS if k in text_lower)
+    invoice_hits += sum(1 for k in INVOICE_KEYWORDS_TABULAR if k in text_lower)
+
     payment_hits = sum(1 for k in PAYMENT_KEYWORDS if k in text_lower)
+    payment_hits += sum(1 for k in PAYMENT_KEYWORDS_TABULAR if k in text_lower)
+
+    logger.debug("classify: invoice_hits=%d payment_hits=%d", invoice_hits, payment_hits)
 
     if invoice_hits == 0 and payment_hits == 0:
         return "UNKNOWN"
-
     if invoice_hits == payment_hits:
-        return document_type  # tied → trust user selection
-
+        return "UNKNOWN"
     return "INVOICE" if invoice_hits > payment_hits else "PAYMENT"
 
 
@@ -74,7 +135,7 @@ class InvoiceExtraction(BaseModel):
     due_date: str | None = Field(default=None, description="Due date in YYYY-MM-DD. If absent use invoice_date + 30 days")
     total_amount: float | None = Field(default=None, description="Final amount due as a number")
     currency: str | None = Field(default=None, description="3-letter code: INR, USD, EUR, GBP")
-    customer_name: str | None = Field(default=None, description="Customer name or null")
+    customer_name: str | None = Field(default=None, description="Customer or bill-to name or null")
     customer_email: str | None = Field(default=None, description="Customer email or null")
     gl_code: str | None = Field(default=None, description="GL code or null")
 
@@ -160,7 +221,11 @@ async def _invoke_with_retry(chain, input_value, retries: int = MAX_RETRIES):
     raise last_exc
 
 
-async def _extract_from_text(raw_text: str, document_type: str) -> dict:
+async def _extract_from_text(raw_text: str) -> tuple[str, dict]:
+    """
+    Classify the document by keyword search, then extract structured fields.
+    Returns (detected_document_type, extracted_record).
+    """
     if len(raw_text) > MAX_TEXT_CHARS:
         raise HTTPException(
             status_code=422,
@@ -170,78 +235,100 @@ async def _extract_from_text(raw_text: str, document_type: str) -> dict:
             ),
         )
 
-    detected = _keyword_classify(raw_text, document_type)
+    detected = classify_document_type(raw_text)
 
     if detected == "UNKNOWN":
         raise HTTPException(
             status_code=422,
             detail=(
-                "The uploaded document does not appear to be an invoice or payment. "
+                "The uploaded document could not be classified as an invoice or payment. "
                 "Please upload a valid financial document."
             ),
         )
 
-    if detected != document_type:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Document mismatch: you selected '{document_type}' "
-                f"but the file appears to be '{detected}'. "
-                "Please re-upload the correct document."
-            ),
-        )
-
     try:
-        prompt, schema = _get_prompt_and_schema(document_type)
+        prompt, schema = _get_prompt_and_schema(detected)
         llm = get_llm()
         structured_llm = llm.with_structured_output(schema)
         result = await _invoke_with_retry(
             structured_llm,
             prompt.format(raw_text=raw_text),
         )
-        return result.model_dump()
+        return detected, result.model_dump()
 
     except HTTPException:
         raise
     except Exception as e:
-        _handle_llm_error(e, document_type)
+        _handle_llm_error(e, detected)
 
 
-async def _extract_from_image(image_content: dict, document_type: str) -> dict:
+async def _extract_from_image(image_content: dict) -> tuple[str, dict]:
+    """
+    Ask the vision LLM to both classify the document and extract its fields.
+    Returns (detected_document_type, extracted_record).
+    """
     try:
-        _, schema = _get_prompt_and_schema(document_type)
         llm = get_vision_llm()
 
+        # Step 1: classify
+        classify_message = HumanMessage(
+            content=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{image_content['media_type']};base64,{image_content['data']}"},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "Look at this financial document. "
+                        "Is it an INVOICE (bill to a customer, with invoice number, due date, amount due) "
+                        "or a PAYMENT (remittance advice, payment receipt, UTR reference, amount paid)? "
+                        'Return ONLY valid JSON: {"type": "INVOICE"} or {"type": "PAYMENT"} or {"type": "UNKNOWN"}. '
+                        "No other text."
+                    ),
+                },
+            ]
+        )
+        classify_response = await _invoke_with_retry(llm, [classify_message])
+        classify_parsed = _safe_json_parse(classify_response.content)
+
+        if classify_parsed is None or classify_parsed.get("type") not in ("INVOICE", "PAYMENT"):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The uploaded document could not be classified as an invoice or payment. "
+                    "Please upload a valid financial document."
+                ),
+            )
+
+        detected = classify_parsed["type"]
+
+        # Step 2: extract fields using the correct schema
+        _, schema = _get_prompt_and_schema(detected)
         schema_fields = "\n".join(
             f"- {name}: {field.description}"
             for name, field in schema.model_fields.items()
         )
 
-        data_url = f"data:{image_content['media_type']};base64,{image_content['data']}"
-        message = HumanMessage(
+        extract_message = HumanMessage(
             content=[
                 {
                     "type": "image_url",
-                    "image_url": {"url": data_url},
+                    "image_url": {"url": f"data:{image_content['media_type']};base64,{image_content['data']}"},
                 },
                 {
                     "type": "text",
                     "text": (
-                        f"STEP 1: Is this document a {document_type}? "
-                        f"If it is NOT a {document_type} (e.g. salary slip, bank statement, "
-                        f"purchase order, or any unrelated document), "
-                        f'return ONLY: {{"mismatch": true}}\n\n'
-                        f"STEP 2: If it IS a {document_type}, extract the fields below "
-                        "and return ONLY valid JSON with mismatch=false. "
-                        "Do NOT invent values — use null for any absent optional field:\n"
+                        f"This is a {detected}. Extract the following fields and return ONLY valid JSON. "
+                        "Use null for any absent optional field. Do NOT invent values.\n"
                         f"{schema_fields}"
                     ),
                 },
             ]
         )
 
-        response = await _invoke_with_retry(llm, [message])
-        parsed = _safe_json_parse(response.content)
+        extract_response = await _invoke_with_retry(llm, [extract_message])
+        parsed = _safe_json_parse(extract_response.content)
 
         if parsed is None:
             raise HTTPException(
@@ -249,44 +336,40 @@ async def _extract_from_image(image_content: dict, document_type: str) -> dict:
                 detail="Could not read the document. Please ensure the image is clear and try again.",
             )
 
-        if parsed.get("mismatch"):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Document mismatch: the image does not appear to be a {document_type}. "
-                    "Please re-upload the correct document."
-                ),
-            )
-
         try:
             validated = schema(**parsed)
         except ValidationError as exc:
             logger.warning(
                 "image_validation_failed",
-                extra={"doc_type": document_type, "errors": exc.errors()},
+                extra={"doc_type": detected, "errors": exc.errors()},
             )
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    f"The {document_type.lower()} image is missing critical fields or has unreadable data. "
+                    f"The {detected.lower()} image is missing critical fields or has unreadable data. "
                     "Please check the image and re-upload."
                 ),
             ) from exc
 
-        return cast(dict[Any, Any], validated.model_dump())
+        return detected, cast(dict[Any, Any], validated.model_dump())
 
     except HTTPException:
         raise
     except Exception as e:
-        _handle_llm_error(e, document_type)
+        _handle_llm_error(e, "document")
 
 
-async def run_extraction(content: str | dict, document_type: str) -> dict:
+async def run_extraction(content: str | dict) -> tuple[str, dict]:
+    """
+    Entry point for extraction. Accepts raw text (str) or image dict.
+    Returns (detected_document_type, extracted_record).
+    Callers no longer pass document_type — classification is automatic.
+    """
     try:
         if isinstance(content, dict):
-            return await _extract_from_image(content, document_type)
-        return await _extract_from_text(content, document_type)
+            return await _extract_from_image(content)
+        return await _extract_from_text(content)
     except HTTPException:
         raise
     except Exception as e:
-        _handle_llm_error(e, document_type)
+        _handle_llm_error(e, "document")

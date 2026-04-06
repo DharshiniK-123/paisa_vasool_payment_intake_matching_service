@@ -35,12 +35,10 @@ def _download_from_gcs(storage_path: str, suffix: str | None = None) -> str:
         raise HTTPException(status_code=422, detail=f"Failed to download file from GCS: {e}") from e
 
 
-
-
 def _extract_pages_from_pdf_sync(storage_path: str) -> list[str]:
     """Extract text per page from a PDF. Returns a list of non-empty page texts."""
     try:
-        import pymupdf 
+        import pymupdf
 
         doc = pymupdf.open(storage_path)
         pages = []
@@ -93,7 +91,8 @@ def _extract_from_image_sync(storage_path: str, file_type: str) -> dict:
 def _extract_from_csv_sync(storage_path: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(storage_path)
-        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+        # Keep spaces — do NOT replace " " with "_" so keyword matching works
+        df.columns = df.columns.str.strip().str.lower()
         df = df.dropna(how="all")
         return df
     except Exception as e:
@@ -104,7 +103,8 @@ def _extract_from_csv_sync(storage_path: str) -> pd.DataFrame:
 def _extract_from_excel_sync(storage_path: str) -> pd.DataFrame:
     try:
         df = pd.read_excel(storage_path, engine="openpyxl")
-        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+        # Keep spaces — do NOT replace " " with "_" so keyword matching works
+        df.columns = df.columns.str.strip().str.lower()
         df = df.dropna(how="all")
         return df
     except Exception as e:
@@ -117,6 +117,11 @@ async def parse_text(storage_path: str, file_type: str, file_url: str | None = N
     Download the file from GCS then extract its content.
     CPU/IO-bound sync extractors are offloaded via asyncio.to_thread()
     so the event loop is never blocked.
+
+    Returns:
+        - PDF:        list[str]      — one markdown string per page
+        - CSV/Excel:  pd.DataFrame   — raw DataFrame with lowercase column names (spaces preserved)
+        - Image:      dict           — base64 encoded image dict
     """
     file_type = file_type.lower()
     suffix = storage_path.rsplit(".", 1)[-1].lower()
@@ -124,16 +129,19 @@ async def parse_text(storage_path: str, file_type: str, file_url: str | None = N
 
     if file_type == "pdf":
         return await asyncio.to_thread(_extract_pages_from_pdf_sync, local_path)
+
     elif file_type == "csv":
         return await asyncio.to_thread(_extract_from_csv_sync, local_path)
+
     elif file_type in ("xlsx", "xls"):
         return await asyncio.to_thread(_extract_from_excel_sync, local_path)
+
     elif file_type in SUPPORTED_IMAGE_TYPES:
         if not file_url:
             raise HTTPException(
                 status_code=422, detail="Image URL is required but was not provided"
             )
-
         return await asyncio.to_thread(_extract_from_image_sync, local_path, file_type)
+
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_type}")

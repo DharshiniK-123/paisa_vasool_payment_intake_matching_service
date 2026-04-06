@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Literal
-from src.core.enums import DocumentStatus, DocumentType
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.rest.dependencies import get_current_user, get_db
+from src.core.enums import DocumentStatus, DocumentType
 from src.core.services import document_service as service
 from src.core.services.document import save_document_records, upload_document_and_enqueue
 from src.data.clients.redis_clients import get_async_redis_client
@@ -23,21 +22,23 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 @router.post("/upload")
 async def upload_document(
-    document_type: DocumentType = Query(...),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Upload document(Invoice/Payment) to the GCS bucket and
-    parse the text and extract the structured output"""
-    
+    """
+    Upload any financial document (invoice or payment) to GCS.
+    The document type is detected automatically from the file content —
+    no `document_type` parameter required.
+    Poll GET /documents/jobs/{job_id}/status to get the result, which
+    will include `document_type` once classification is complete.
+    """
     import uuid
 
     try:
         job_id = str(uuid.uuid4())
         result = await upload_document_and_enqueue(
             file=file,
-            document_type=document_type,
             db=db,
             job_id=job_id,
             user_id=user.get("id"),
@@ -47,17 +48,21 @@ async def upload_document(
             "status": DocumentStatus.PROCESSING,
             "job_id": job_id,
             "document_id": result["document_id"],
-            "message": "File uploaded. Extraction running in background.",
+            "message": "File uploaded. Classification and extraction running in background.",
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="File upload unsuccessful.") from e
+        raise HTTPException(status_code=500, detail=f"File upload unsuccessful. {str(e)}") from e
 
 
 @router.get("/jobs/{job_id}/status")
 async def get_job_status(job_id: str, user: dict = Depends(get_current_user)):
-    """Status of the rq worker"""
+    """
+    Poll the status of a background extraction job.
+    On success the response includes `document_type` (INVOICE or PAYMENT)
+    so the frontend can render the correct preview table.
+    """
     try:
         redis_client = get_async_redis_client()
         data = await redis_client.get(f"job:{job_id}") if redis_client else None
@@ -87,7 +92,9 @@ async def get_user_stats(
 
 
 class SaveRecordsRequest(BaseModel):
-    document_type: DocumentType
+    # document_type is optional — if the frontend omits it we resolve it from
+    # the Document row (which was updated by the worker after classification).
+    document_type: DocumentType | None = None
     records: list[dict]
 
 
@@ -98,7 +105,11 @@ async def save_records(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Save records and match them"""
+    """
+    Confirm and persist extracted records.
+    `document_type` is optional in the request body — if omitted it is read
+    from the Document row that was updated by the background worker.
+    """
     try:
         doc = await repo.get_document_by_id(document_id, db)
         if not doc:
@@ -106,16 +117,26 @@ async def save_records(
         if not body.records:
             raise HTTPException(status_code=400, detail="No records provided.")
 
-        await service.resolve_customer_ids(body.records, body.document_type, document_id, db)
+        # Prefer what the frontend sent; fall back to what the worker wrote to DB.
+        document_type = body.document_type or doc.document_type
+        if not document_type or document_type == DocumentType.UNKNOWN:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Document type could not be determined. "
+                    "The file may still be processing — please try again in a moment."
+                ),
+            )
 
-        service.validate_records(body.records, body.document_type)
-        await service.check_duplicates(body.records, body.document_type, document_id, db)
+        await service.resolve_customer_ids(body.records, document_type, document_id, db)
+        service.validate_records(body.records, document_type)
+        await service.check_duplicates(body.records, document_type, document_id, db)
 
         count = await save_document_records(
             document_id=document_id,
-            document_type=body.document_type,
+            document_type=document_type,
             records=body.records,
-            db=db,  
+            db=db,
         )
         return {
             "document_id": document_id,
@@ -138,7 +159,7 @@ async def list_documents(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Fetch all the list of documents"""
+    """Fetch all documents"""
     try:
         return await repo.get_all_documents(db)
     except Exception as e:
@@ -169,7 +190,7 @@ async def get_document_invoices(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Fetch invoice by document id"""
+    """Fetch invoices by document id"""
     try:
         rows = await repo.get_invoices_with_matches(document_id, db)
         if not rows:
@@ -187,7 +208,7 @@ async def get_document_payments(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Fetch payment by document id"""
+    """Fetch payments by document id"""
     try:
         rows = await repo.get_payments_by_document(document_id, db)
         if not rows:
@@ -207,7 +228,7 @@ async def delete_invoice(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """soft delete an invoice by its id"""
+    """Soft delete an invoice by its id"""
     try:
         invoice = await repo.get_invoice_by_id(invoice_id, db)
         if not invoice:
@@ -227,7 +248,7 @@ async def delete_payment(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """soft delete payment by payment id"""
+    """Soft delete a payment by payment id"""
     try:
         payment = await repo.get_payment_by_id(payment_id, db)
         if not payment:
